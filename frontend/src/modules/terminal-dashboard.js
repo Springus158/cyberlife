@@ -1165,6 +1165,9 @@ function voiceSubmitText(text) {
     // it can still be edited there before Enter
     WriteITermTextBySessionID(targetSession, text, false);
   }
+  if (window.savePromptToHistory && text.length > 5) {
+    window.savePromptToHistory(text);
+  }
 }
 
 function stopVoiceAndSubmit() {
