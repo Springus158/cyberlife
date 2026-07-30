@@ -71,6 +71,17 @@ type TmuxSession struct {
 	Path string
 }
 
+// splitTmuxFields splits a line of `-F` output on the \x1f field separator.
+// tmux 3.4+ octal-escapes non-printable characters in format output, so the
+// separator arrives as the literal text `\037` there — unambiguously, since a
+// real backslash in the data would itself have been escaped as `\134`.
+func splitTmuxFields(line string, n int) []string {
+	if strings.Contains(line, "\x1f") {
+		return strings.SplitN(line, "\x1f", n)
+	}
+	return strings.SplitN(line, `\037`, n)
+}
+
 func listTmuxSessions() []TmuxSession {
 	out, err := tmuxExec("list-sessions", "-F", "#{session_name}\x1f#{session_path}")
 	if err != nil {
@@ -83,7 +94,7 @@ func listTmuxSessions() []TmuxSession {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\x1f", 2)
+		parts := splitTmuxFields(line, 2)
 		s := TmuxSession{Name: parts[0]}
 		if len(parts) > 1 {
 			s.Path = parts[1]
@@ -136,7 +147,7 @@ func tmuxHostClient() (tty string, activeSession string) {
 		return "", ""
 	}
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, "\x1f", 3)
+		parts := splitTmuxFields(line, 3)
 		if len(parts) < 3 || parts[0] == "1" {
 			continue
 		}

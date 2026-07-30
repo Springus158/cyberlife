@@ -172,9 +172,17 @@ func (c *Controller) captureStyledTmuxScreen(virtualID, name string) *StyledCont
 
 	screen := out
 	dims := ""
-	if idx := strings.LastIndex(out, "\x1f"); idx >= 0 {
+	// The separator is escaped to the literal `\037` by tmux 3.4+ (format
+	// output only — the captured screen keeps its raw bytes). Whichever form
+	// occurs last is the real dims marker: display-message output follows the
+	// captured screen, so pane content can never sit past it.
+	idx, sepLen := strings.LastIndex(out, "\x1f"), 1
+	if j := strings.LastIndex(out, `\037`); j > idx {
+		idx, sepLen = j, len(`\037`)
+	}
+	if idx >= 0 {
 		screen = strings.TrimSuffix(out[:idx], "\n")
-		dims = out[idx+1:]
+		dims = out[idx+sepLen:]
 	}
 
 	content := &StyledContent{
