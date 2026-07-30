@@ -380,9 +380,34 @@ window.itermRecheckDeps = async function() {
   renderTerminalDashboard();
 };
 
+function termHintBarContent() {
+  const chip = (act, key, label) => act
+    ? `<button class="term-hint-chip" data-act="${act}"><kbd>${key}</kbd>${label}</button>`
+    : `<span class="term-hint-chip"><kbd>${key}</kbd>${label}</span>`;
+  if (getMode() === 'term') {
+    return `
+      <span class="term-hint-state term-hint-attached">ATTACHED</span>
+      ${chip(null, 'A…Z', 'keys go to the session')}
+      ${chip('termAttachToggle', '⌃U', 'detach')}
+      ${chip('termMenuToggle', '⌘M', 'menu')}
+      ${chip('itermToggleVoice', '⌘R', 'voice')}
+      ${chip(null, 'Esc', 'interrupt Claude')}
+    `;
+  }
+  return `
+    <span class="term-hint-state">NORMAL</span>
+    ${chip('termAttachToggle', 'a', 'attach — type into session')}
+    ${chip(null, 'j k', 'switch session')}
+    ${chip('termMenuToggle', 'm', 'menu — voice & prompts')}
+    ${chip('itermToggleVoice', '⌘R', 'voice')}
+    ${chip(null, 'Esc', 'interrupt Claude')}
+  `;
+}
+
 function renderInputPanel() {
   const sessionId = dashboardState.viewingSessionId;
   return `
+              <div class="term-hint-bar" id="termHintBar">${termHintBarContent()}</div>
               <div class="keyboard-helper">
                 ${state.activeProject ? `${accountBadgeHtml(sessionId)}<span class="current-project-label current-project-clickable" data-act="openProjectSwitcher" title="Switch project (p)" style="--project-color: ${state.activeProject.color || '#3b82f6'}">${state.activeProject.icon || ''} ${escapeHtml(state.activeProject.name)} <span class="project-label-caret">▾</span></span>` : ''}
                 <button class="key-btn" data-act="termMenuToggle" title="Voice, prompts &amp; settings (⌘M)">☰ Menu</button>
@@ -917,8 +942,11 @@ window.itermIsViewingSession = function() {
   return !!dashboardState.viewingSessionId;
 };
 
-// Redraw on NORMAL<->TERM switches so the attach cursor and outline follow
+// Redraw on NORMAL<->TERM switches so the attach cursor, outline and hint
+// bar follow
 document.addEventListener('shell-mode-change', () => {
+  const hintBar = document.getElementById('termHintBar');
+  if (hintBar) hintBar.innerHTML = termHintBarContent();
   const viewer = document.getElementById('itermOutputViewer');
   if (!viewer || !dashboardState.styledLines) return;
   viewer._forceRender = true;
@@ -1355,6 +1383,11 @@ const DASHBOARD_ACTIONS = {
   itermToggleWrappers: () => window.itermToggleWrappers(),
   itermRecheckDeps: () => window.itermRecheckDeps(),
   termMenuToggle: () => toggleTermMenu(),
+  termAttachToggle: () => {
+    if (!dashboardState.viewingSessionId) return;
+    document.activeElement?.blur();
+    setMode(getMode() === 'term' ? 'normal' : 'term');
+  },
   itermToggleVoice: () => window.itermToggleVoice(),
   itermToggleVoiceConfig: (e) => window.itermToggleVoiceConfig(e),
   itermVoicePreviewBackdrop: (e) => window.itermVoicePreviewBackdrop(e),
