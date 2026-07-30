@@ -35,6 +35,7 @@ const emailState = {
   threadCache: new Map(),
   openThread: null,
   loadingList: false,
+  loadingLabels: false,
   loadingThread: false,
   undo: null,           // {label, thread, index, revert: async fn, timer, deadline}
   pollTimer: null,
@@ -43,6 +44,7 @@ const emailState = {
   mcpEnabled: false,
   threadDrafts: [],
   draftEditor: null,     // {draftId, to, subject, body, attachments, includeSignature}
+  draftFloating: false,  // compose floats over the thread; a reply docks under it
   draftPollTimer: null,
   draftWaiting: false,
   contactsByAccount: {},   // account -> [{name, email, count}]
@@ -151,13 +153,18 @@ function updateUnreadBadge() {
 // ============================================
 
 async function loadLabels() {
-  if (!emailState.account) return;
+  // Unread counts cost one API call per label, so a second concurrent pass
+  // doubles the slowest part of opening Mail for nothing.
+  if (!emailState.account || emailState.loadingLabels) return;
+  emailState.loadingLabels = true;
   try {
     emailState.labels = await GmailListLabels(emailState.account) || [];
     updateUnreadBadge();
     renderLabelsSidebar();
   } catch (err) {
     console.error('Failed to load labels:', err);
+  } finally {
+    emailState.loadingLabels = false;
   }
 }
 
@@ -200,10 +207,11 @@ async function openThread(threadId, { forceFresh = false } = {}) {
   if (emailState.selectedId !== threadId) {
     stopDraftPolling();
     emailState.threadDrafts = [];
-    emailState.draftEditor = null;
+    // A floating new message is not tied to the thread being left behind
+    if (!emailState.draftFloating) emailState.draftEditor = null;
   }
   emailState.selectedId = threadId;
-  renderThreadList();
+  paintSelection();
   // Opening (keyboard, mouse or hint click) always lands the cursor here
   mailList.syncTo(el => el.dataset.thread === threadId);
   loadThreadDrafts(threadId);
@@ -254,7 +262,7 @@ async function setThreadRead(threadId, read) {
   if (row) {
     if (row.unread === !read) return;
     row.unread = !read;
-    renderThreadList();
+    repaintRow(threadId);
     adjustLabelUnread(read ? -1 : 1);
   }
   try {
@@ -262,20 +270,20 @@ async function setThreadRead(threadId, read) {
       read ? [] : ['UNREAD'], read ? ['UNREAD'] : []);
   } catch (err) {
     console.error('Failed to change read state:', err);
-    if (row) { row.unread = read; renderThreadList(); adjustLabelUnread(read ? 1 : -1); }
+    if (row) { row.unread = read; repaintRow(threadId); adjustLabelUnread(read ? 1 : -1); }
     showToast(`✗ ${err}`, true);
   }
 }
 
 async function setThreadStarred(threadId, starred) {
   const row = emailState.threads.find(t => t.id === threadId);
-  if (row) { row.starred = starred; renderThreadList(); }
+  if (row) { row.starred = starred; repaintRow(threadId); }
   try {
     await GmailModifyThread(emailState.account, threadId,
       starred ? ['STARRED'] : [], starred ? [] : ['STARRED']);
   } catch (err) {
     console.error('Failed to change star:', err);
-    if (row) { row.starred = !starred; renderThreadList(); }
+    if (row) { row.starred = !starred; repaintRow(threadId); }
     showToast(`✗ ${err}`, true);
   }
 }
@@ -369,13 +377,26 @@ async function toggleUserLabel(threadId, labelId, apply) {
 async function loadThreadDrafts(threadId) {
   try {
     const drafts = await GmailListThreadDrafts(emailState.account, threadId) || [];
-    if (emailState.selectedId === threadId) {
-      emailState.threadDrafts = drafts;
-      renderReadingPane();
-    }
+    if (emailState.selectedId !== threadId) return;
+    emailState.threadDrafts = drafts;
+    // This lands after the message is already on screen, so repainting the
+    // whole pane would reload every message iframe — a visible flash for a
+    // button that is usually not even there. Only the button is touched.
+    renderThreadDraftsButton();
   } catch (err) {
     console.error('Failed to load thread drafts:', err);
   }
+}
+
+function renderThreadDraftsButton() {
+  const host = document.getElementById('emailDraftsBadge');
+  if (!host) return;
+  const count = emailState.threadDrafts.length;
+  host.innerHTML = count > 0 && !emailState.draftEditor
+    ? `<button class="email-pill" data-act="opendraft">${uiIcon('draft', 18)}<span>Draft (${count})</span></button>`
+    : '';
+  host.querySelector('[data-act="opendraft"]')
+    ?.addEventListener('click', () => openDraftEditor(emailState.threadDrafts[0]));
 }
 
 function claudeDraftReply(thread) {
@@ -460,6 +481,7 @@ function replyToOpenThread(all) {
   if (recipients.length === 0) return false;
 
   const subject = last.subject || thread.messages[0]?.subject || '';
+  emailState.draftFloating = false;
   emailState.draftEditor = {
     draftId: null,
     to: recipients.join(', '),
@@ -480,6 +502,7 @@ function forwardOpenThread() {
   if (!last) return false;
   const subject = last.subject || thread.messages[0]?.subject || '';
   const quoted = last.bodyText || htmlToText(last.bodyHtml || '');
+  emailState.draftFloating = false;
   emailState.draftEditor = {
     draftId: null,
     to: '',
@@ -504,6 +527,7 @@ function forwardOpenThread() {
 }
 
 function openDraftEditor(draft) {
+  emailState.draftFloating = false;
   emailState.draftEditor = {
     draftId: draft.draftId,
     to: draft.to || '',
@@ -593,12 +617,15 @@ async function sendDraft() {
     } else {
       await GmailSendMessage(emailState.account, form.to, form.subject, form.body, currentSignature(), editor.attachments);
     }
+    const wasFloating = emailState.draftFloating;
     emailState.draftEditor = null;
+    emailState.draftFloating = false;
     emailState.threadDrafts = emailState.threadDrafts.filter(d => d.draftId !== editor.draftId);
     showToast('📤 Sent');
-    if (emailState.selectedId) {
+    closeComposeWindow();
+    if (!wasFloating && emailState.selectedId) {
       openThread(emailState.selectedId, { forceFresh: true });
-    } else {
+    } else if (!wasFloating) {
       renderReadingPane();
     }
   } catch (err) {
@@ -905,6 +932,7 @@ export async function renderEmailPanel() {
         <div class="email-list" id="emailThreadList"></div>
         <div class="email-reading" id="emailReadingPane"></div>
       </div>
+      <div class="email-compose-window" id="emailComposeWindow" style="display:none"></div>
       <div id="emailToastHost"></div>
       <div id="emailPreviewOverlay" style="display:none"></div>
     </div>
@@ -984,9 +1012,9 @@ function renderAccountsBar() {
       emailState.labelId = 'INBOX';
       emailState.query = '';
       mailList.reset();
+      // renderEmailPanel refetches on its own once the lists above are empty;
+      // calling load* here as well fetched every label and thread twice.
       renderEmailPanel();
-      loadLabels();
-      loadThreads();
     });
   });
 }
@@ -1093,15 +1121,13 @@ function renderLabelsSidebar() {
   `;
 
   document.getElementById('emailComposeBtn')?.addEventListener('click', () => {
-    clearTimeout(emailState.markReadTimer);
+    // The thread underneath stays open and readable — a new message floats
+    // over it rather than replacing it.
     stopDraftPolling();
-    emailState.selectedId = null;
-    emailState.openThread = null;
-    emailState.threadDrafts = [];
+    emailState.draftFloating = true;
     emailState.draftEditor = { draftId: null, to: '', subject: '', body: '', attachments: [], includeSignature: true };
     ensureComposeMeta();
-    renderThreadList();
-    renderReadingPane();
+    renderDraftEditor();
     document.getElementById('emailDraftTo')?.focus();
   });
 
@@ -1128,11 +1154,64 @@ function renderLabelsSidebar() {
   });
 }
 
+function userLabelIndex() {
+  return new Map(emailState.labels.filter(l => l.type === 'user').map(l => [l.id, l]));
+}
+
+function threadRowHtml(t, userLabelById) {
+  const chips = (t.labelIds || [])
+    .filter(id => userLabelById.has(id))
+    .slice(0, 3)
+    .map(id => {
+      const l = userLabelById.get(id);
+      return `<span class="email-row-chip" style="background:${l.color || '#334155'};color:${l.textColor || '#e2e8f0'}">${escapeHtml(l.name)}</span>`;
+    }).join('');
+  return `
+      <div class="email-row ${t.unread ? 'unread' : ''} ${t.id === emailState.selectedId ? 'selected' : ''} ${emailState.bulkSelected.has(t.id) ? 'bulk-checked' : ''}" data-thread="${escapeAttr(t.id)}">
+        <input type="checkbox" class="email-row-check" data-action="select" ${emailState.bulkSelected.has(t.id) ? 'checked' : ''}>
+        <span class="email-row-star ${t.starred ? 'starred' : ''}" data-action="star" title="Star">${uiIcon(t.starred ? 'starFilled' : 'star', 18)}</span>
+        <div class="email-row-main">
+          <div class="email-row-top">
+            <span class="email-row-from">${t.unread ? '<span class="email-unread-dot"></span>' : ''}${escapeHtml(t.from || '(unknown)')}${t.msgCount > 1 ? ` <span class="email-row-count">${t.msgCount}</span>` : ''}</span>
+            <span class="email-row-date">${escapeHtml(t.dateText || '')}</span>
+          </div>
+          <div class="email-row-subject">${chips}<span class="email-row-subject-text">${escapeHtml(t.subject || '(no subject)')}</span></div>
+          <div class="email-row-snippet">${escapeHtml(decodeEntities(t.snippet || ''))}</div>
+        </div>
+        <div class="email-row-actions">
+          <button class="email-icon-btn" data-action="archive" title="Archive (e)">${uiIcon('archive')}</button>
+          <button class="email-icon-btn" data-action="trash" title="Delete (#)">${uiIcon('trash')}</button>
+          <button class="email-icon-btn" data-action="read" title="${t.unread ? 'Mark as read' : 'Mark as unread'}">${uiIcon(t.unread ? 'mailOpen' : 'mail')}</button>
+        </div>
+      </div>`;
+}
+
+// Moving the cursor changes one class on two rows. Rebuilding all fifty for
+// that is what made j/k feel heavy.
+function paintSelection() {
+  document.querySelectorAll('#emailThreadList .email-row').forEach(row => {
+    row.classList.toggle('selected', row.dataset.thread === emailState.selectedId);
+  });
+}
+
+// Star and read/unread change a single row; swap that row in place instead of
+// the whole list, then let the cursor re-resolve to the new node.
+function repaintRow(threadId) {
+  const row = emailState.threads.find(t => t.id === threadId);
+  const el = document.querySelector(`#emailThreadList .email-row[data-thread="${CSS.escape(threadId)}"]`);
+  if (!row || !el) {
+    renderThreadList();
+    return;
+  }
+  el.outerHTML = threadRowHtml(row, userLabelIndex());
+  mailList.refresh();
+}
+
 function renderThreadList() {
   const host = document.getElementById('emailThreadList');
   if (!host) return;
 
-  const userLabelById = new Map(emailState.labels.filter(l => l.type === 'user').map(l => [l.id, l]));
+  const userLabelById = userLabelIndex();
 
   if (emailState.loadingList && emailState.threads.length === 0) {
     host.innerHTML = '<div class="email-list-note">Loading…</div>';
@@ -1157,42 +1236,21 @@ function renderThreadList() {
       <button class="email-icon-btn" id="emailBulkClear" title="Clear selection">${uiIcon('close')}</button>` : ''}
     </div>
     ${emailState.loadingList ? '<div class="email-list-refreshing">refreshing…</div>' : ''}
-    ${emailState.threads.map(t => {
-      const chips = (t.labelIds || [])
-        .filter(id => userLabelById.has(id))
-        .slice(0, 3)
-        .map(id => {
-          const l = userLabelById.get(id);
-          return `<span class="email-row-chip" style="background:${l.color || '#334155'};color:${l.textColor || '#e2e8f0'}">${escapeHtml(l.name)}</span>`;
-        }).join('');
-      return `
-      <div class="email-row ${t.unread ? 'unread' : ''} ${t.id === emailState.selectedId ? 'selected' : ''} ${emailState.bulkSelected.has(t.id) ? 'bulk-checked' : ''}" data-thread="${escapeAttr(t.id)}">
-        <input type="checkbox" class="email-row-check" data-action="select" ${emailState.bulkSelected.has(t.id) ? 'checked' : ''}>
-        <span class="email-row-star ${t.starred ? 'starred' : ''}" data-action="star" title="Star">${uiIcon(t.starred ? 'starFilled' : 'star', 18)}</span>
-        <div class="email-row-main">
-          <div class="email-row-top">
-            <span class="email-row-from">${t.unread ? '<span class="email-unread-dot"></span>' : ''}${escapeHtml(t.from || '(unknown)')}${t.msgCount > 1 ? ` <span class="email-row-count">${t.msgCount}</span>` : ''}</span>
-            <span class="email-row-date">${escapeHtml(t.dateText || '')}</span>
-          </div>
-          <div class="email-row-subject">${chips}<span class="email-row-subject-text">${escapeHtml(t.subject || '(no subject)')}</span></div>
-          <div class="email-row-snippet">${escapeHtml(decodeEntities(t.snippet || ''))}</div>
-        </div>
-        <div class="email-row-actions">
-          <button class="email-icon-btn" data-action="archive" title="Archive (e)">${uiIcon('archive')}</button>
-          <button class="email-icon-btn" data-action="trash" title="Delete (#)">${uiIcon('trash')}</button>
-          <button class="email-icon-btn" data-action="read" title="${t.unread ? 'Mark as read' : 'Mark as unread'}">${uiIcon(t.unread ? 'mailOpen' : 'mail')}</button>
-        </div>
-      </div>`;
-    }).join('')}
+    ${emailState.threads.map(t => threadRowHtml(t, userLabelById)).join('')}
     <div class="email-list-pager">
       ${emailState.prevTokens.length > 0 ? '<button id="emailPageNewer">‹ Newer</button>' : ''}
       ${emailState.nextPageToken ? '<button id="emailPageOlder">Older ›</button>' : ''}
     </div>
   `;
 
-  host.querySelectorAll('.email-row').forEach(row => {
-    const threadId = row.dataset.thread;
-    row.addEventListener('click', (e) => {
+  // One delegated listener for the whole list: rows come and go on every
+  // repaint, and fifty listeners would have to be rebuilt with them.
+  if (!host.dataset.rowsWired) {
+    host.dataset.rowsWired = '1';
+    host.addEventListener('click', (e) => {
+      const rowEl = e.target.closest('.email-row');
+      if (!rowEl) return;
+      const threadId = rowEl.dataset.thread;
       const action = e.target.closest('[data-action]')?.dataset.action;
       const thread = emailState.threads.find(t => t.id === threadId);
       if (action === 'select') {
@@ -1210,7 +1268,7 @@ function renderThreadList() {
       if (action === 'trash') { trashThread(threadId); return; }
       openThread(threadId);
     });
-  });
+  }
   const toggleAll = document.getElementById('emailBulkToggleAll');
   if (toggleAll) {
     toggleAll.indeterminate = selectedOnPage > 0 && selectedOnPage < emailState.threads.length;
@@ -1241,7 +1299,9 @@ function closeReadingPane() {
   stopDraftPolling();
   emailState.selectedId = null;
   emailState.openThread = null;
-  emailState.draftEditor = null;
+  // Closing the mail you were reading must not throw away a message you are
+  // still writing — the compose window is independent of the pane.
+  if (!emailState.draftFloating) emailState.draftEditor = null;
   emailState.threadDrafts = [];
   renderThreadList();
   renderReadingPane();
@@ -1257,11 +1317,6 @@ function renderReadingPane() {
   }
   const thread = emailState.openThread;
   if (!thread) {
-    if (emailState.draftEditor) {
-      host.innerHTML = `<div class="email-compose-wrap">${draftEditorHtml('✏️ New message')}</div>`;
-      wireDraftEditor();
-      return;
-    }
     host.innerHTML = '<div class="email-reading-empty">Select a conversation to read it here.<br><span class="email-hint-keys">j/k navigate · e archive · # delete · u read/unread · x select · * select all · z undo</span></div>';
     return;
   }
@@ -1291,8 +1346,7 @@ function renderReadingPane() {
       <button class="email-pill email-claude-btn" data-act="claude" ${emailState.draftWaiting ? 'disabled' : ''}>
         ${uiIcon('robot', 18)}<span>${emailState.draftWaiting ? 'Waiting for Claude…' : 'Draft with Claude'}</span>
       </button>` : ''}
-      ${emailState.threadDrafts.length > 0 && !emailState.draftEditor ? `
-      <button class="email-pill" data-act="opendraft">${uiIcon('draft', 18)}<span>Draft (${emailState.threadDrafts.length})</span></button>` : ''}
+      <span id="emailDraftsBadge"></span>
       <button class="email-icon-btn email-reading-close" data-act="close" title="Close (Esc)">${uiIcon('close')}</button>
     </div>
     <div class="email-reading-head">
@@ -1316,7 +1370,7 @@ function renderReadingPane() {
   host.querySelector('[data-act="replyall"]')?.addEventListener('click', () => replyToOpenThread(true));
   host.querySelector('[data-act="forward"]')?.addEventListener('click', forwardOpenThread);
   host.querySelector('[data-act="claude"]')?.addEventListener('click', () => claudeDraftReply(thread));
-  host.querySelector('[data-act="opendraft"]')?.addEventListener('click', () => openDraftEditor(emailState.threadDrafts[0]));
+  renderThreadDraftsButton();
   host.querySelector('[data-act="archive"]')?.addEventListener('click', () => archiveThread(thread.id));
   host.querySelector('[data-act="trash"]')?.addEventListener('click', () => trashThread(thread.id));
   host.querySelector('[data-act="read"]')?.addEventListener('click', () => setThreadRead(thread.id, !!row?.unread));
@@ -1375,7 +1429,14 @@ function renderReadingPane() {
 
 // Repaint only the editor. Rebuilding the whole reading pane would reload every
 // message iframe, and their post-load growth pushes the editor out of view.
+// A reply docks under its thread; a new message floats over everything so the
+// mail being answered stays readable.
 function renderDraftEditor() {
+  if (emailState.draftFloating) {
+    renderComposeWindow();
+    return;
+  }
+  closeComposeWindow();
   const host = document.getElementById('emailDraftHost');
   if (!emailState.openThread || !host) {
     renderReadingPane();
@@ -1387,6 +1448,108 @@ function renderDraftEditor() {
   const openDraftBtn = document.querySelector('#emailReadingPane [data-act="opendraft"]');
   if (openDraftBtn) openDraftBtn.style.display = emailState.draftEditor ? 'none' : '';
   wireDraftEditor();
+}
+
+function closeComposeWindow() {
+  const win = document.getElementById('emailComposeWindow');
+  if (win) {
+    win.style.display = 'none';
+    win.innerHTML = '';
+  }
+}
+
+function renderComposeWindow() {
+  const win = document.getElementById('emailComposeWindow');
+  if (!win) return;
+  if (!emailState.draftEditor) {
+    emailState.draftFloating = false;
+    closeComposeWindow();
+    return;
+  }
+  win.style.display = 'flex';
+  applyComposeGeometry(win);
+  win.innerHTML = draftEditorHtml('New message');
+  wireDraftEditor();
+  makeComposeDraggable(win);
+}
+
+// Position and size survive reopening — a window that jumps back to the corner
+// every time is worse than a docked panel.
+function composeGeometry() {
+  try {
+    return JSON.parse(localStorage.getItem('mailComposeBox') || 'null') || {};
+  } catch (err) {
+    console.warn('mail: stored compose geometry is unreadable', err);
+    return {};
+  }
+}
+
+function saveComposeGeometry(box) {
+  localStorage.setItem('mailComposeBox', JSON.stringify(box));
+}
+
+function applyComposeGeometry(win) {
+  const box = composeGeometry();
+  if (box.width) win.style.width = `${box.width}px`;
+  if (box.height) win.style.height = `${box.height}px`;
+  if (box.left != null && box.top != null) {
+    win.style.left = `${box.left}px`;
+    win.style.top = `${box.top}px`;
+    win.style.right = 'auto';
+    win.style.bottom = 'auto';
+  }
+}
+
+function makeComposeDraggable(win) {
+  const handle = win.querySelector('.email-draft-header');
+  if (!handle) return;
+  handle.addEventListener('mousedown', (e) => {
+    if (e.target.closest('button')) return;
+    e.preventDefault();
+    const start = win.getBoundingClientRect();
+    const layout = win.parentElement.getBoundingClientRect();
+    const grabX = e.clientX - start.left;
+    const grabY = e.clientY - start.top;
+
+    const move = (ev) => {
+      // Keep the header reachable: the window may hang off the right and
+      // bottom, but never far enough to lose the bar you drag it back by.
+      const maxLeft = layout.width - 80;
+      const maxTop = layout.height - 40;
+      const left = Math.min(Math.max(ev.clientX - layout.left - grabX, 0), maxLeft);
+      const top = Math.min(Math.max(ev.clientY - layout.top - grabY, 0), maxTop);
+      win.style.left = `${left}px`;
+      win.style.top = `${top}px`;
+      win.style.right = 'auto';
+      win.style.bottom = 'auto';
+    };
+    const drop = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', drop);
+      const box = win.getBoundingClientRect();
+      const layoutNow = win.parentElement.getBoundingClientRect();
+      saveComposeGeometry({
+        left: box.left - layoutNow.left,
+        top: box.top - layoutNow.top,
+        width: box.width,
+        height: box.height,
+      });
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', drop);
+  });
+
+  // CSS resize gives no event; record the size whenever the pointer leaves it
+  win.addEventListener('mouseup', () => {
+    const box = win.getBoundingClientRect();
+    const layout = win.parentElement.getBoundingClientRect();
+    saveComposeGeometry({
+      left: box.left - layout.left,
+      top: box.top - layout.top,
+      width: box.width,
+      height: box.height,
+    });
+  });
 }
 
 function draftEditorHtml(title) {
@@ -2052,8 +2215,23 @@ function addEmailStyles() {
     .email-att-tile .email-icon-btn { width: 30px; height: 30px; }
 
     .email-claude-btn { color: var(--m-accent); border-color: var(--m-accent); }
-    .email-compose-wrap { padding: 20px 24px; max-width: 1000px; width: 100%; margin: 0 auto; box-sizing: border-box; }
-    .email-compose-wrap .email-draft-editor textarea { min-height: 340px; }
+    .email-compose-window {
+      position: absolute; right: 24px; bottom: 0; z-index: 40;
+      width: 560px; height: 460px; min-width: 360px; min-height: 260px;
+      max-width: calc(100% - 32px); max-height: calc(100% - 16px);
+      display: flex; flex-direction: column; overflow: hidden;
+      resize: both;
+      background: var(--m-surface); border: 1px solid var(--m-border);
+      border-radius: 12px 12px 0 0; box-shadow: var(--m-lift);
+    }
+    .email-compose-window .email-draft-editor {
+      margin: 0; border: none; border-radius: 0; box-shadow: none;
+      flex: 1; min-height: 0; display: flex; flex-direction: column;
+    }
+    .email-compose-window .email-draft-header { cursor: move; user-select: none; }
+    .email-compose-window .email-draft-editor textarea { flex: 1; min-height: 80px; }
+    .email-compose-window .email-draft-extras { flex-shrink: 0; }
+    .email-compose-window .email-draft-actions { flex-shrink: 0; }
     .email-draft-host {
       position: sticky; bottom: 0; z-index: 6; margin-top: auto;
       background: var(--m-surface); box-shadow: 0 -8px 20px rgba(0,0,0,0.12);
