@@ -242,6 +242,12 @@ func (c *Controller) ensureTmuxSession(name, workingDir string, env map[string]s
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
 	}
+	// Claude Code 2.1+ defaults to a fullscreen TUI on the alternate screen,
+	// where tmux accumulates no history — the dashboard's scrollback viewer
+	// (capture-pane -S) then has nothing to show. Force the inline renderer.
+	if _, ok := env["CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"]; !ok {
+		args = append(args, "-e", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1")
+	}
 	args = append(args, inner...)
 	if _, err := tmuxExec(args...); err != nil {
 		return err
