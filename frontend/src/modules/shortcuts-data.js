@@ -29,7 +29,7 @@ export const SHORTCUT_SECTIONS = [
   },
   {
     title: 'Term',
-    moduleId: 'dashboard-tab',
+    moduleId: 'tab-dashboard',
     rows: [
       { keys: ['j', 'k'], desc: 'Prev / next session' },
       { keys: ['a'], desc: 'Attach — keys go to the session' },

@@ -12,7 +12,7 @@ import { openCommandPalette, closeCommandPalette, isCommandPaletteOpen } from '.
 
 // g-chord: `g` followed by a module mnemonic within the window
 const G_CHORD_TARGETS = {
-  d: 'dashboard-tab',
+  d: 'tab-dashboard',
   p: 'projects-tab',
   b: 'board-tab',
   h: 'health-tab',
@@ -435,7 +435,22 @@ window.showShortcutsModal = function() {
   }
 };
 
+// Module ids are repeated as literals in the shortcut sections and the g-chord
+// map. A typo there fails silently — ? falls back to the first section, g+key
+// does nothing — so the mismatch is reported instead of shrugged off.
+function warnOnUnknownModuleIds() {
+  const known = new Set(getModules().map(m => m.id));
+  if (known.size === 0) return;
+  const unknown = [
+    ...SHORTCUT_SECTIONS.filter(s => s.moduleId && !known.has(s.moduleId)).map(s => `section ${s.title} -> ${s.moduleId}`),
+    ...Object.entries(G_CHORD_TARGETS).filter(([, id]) => !known.has(id)).map(([k, id]) => `g+${k} -> ${id}`),
+  ];
+  if (unknown.length) console.warn('shortcuts point at modules that do not exist:', unknown);
+}
+
 export function initKeyboardShortcuts() {
+  warnOnUnknownModuleIds();
+
   // Consume Escape's default action app-wide (capture phase, before any
   // handler) — otherwise macOS treats an unconsumed Esc as "exit fullscreen"
   // even when it only closed a popup
