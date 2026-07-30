@@ -170,20 +170,7 @@ func (c *Controller) captureStyledTmuxScreen(virtualID, name string) *StyledCont
 		return nil
 	}
 
-	screen := out
-	dims := ""
-	// The separator is escaped to the literal `\037` by tmux 3.4+ (format
-	// output only — the captured screen keeps its raw bytes). Whichever form
-	// occurs last is the real dims marker: display-message output follows the
-	// captured screen, so pane content can never sit past it.
-	idx, sepLen := strings.LastIndex(out, "\x1f"), 1
-	if j := strings.LastIndex(out, `\037`); j > idx {
-		idx, sepLen = j, len(`\037`)
-	}
-	if idx >= 0 {
-		screen = strings.TrimSuffix(out[:idx], "\n")
-		dims = out[idx+sepLen:]
-	}
+	screen, dims := splitCaptureDims(out)
 
 	content := &StyledContent{
 		SessionID: virtualID,
@@ -198,4 +185,20 @@ func (c *Controller) captureStyledTmuxScreen(virtualID, name string) *StyledCont
 		content.Cursor.Y, _ = strconv.Atoi(parts[3])
 	}
 	return content
+}
+
+// splitCaptureDims separates the captured screen from the trailing
+// display-message dims line. The \x1f marker between them is escaped to the
+// literal `\037` by tmux 3.4+ (format output only — the captured screen keeps
+// its raw bytes). Whichever form occurs last is the real marker: the dims line
+// follows the captured screen, so pane content can never sit past it.
+func splitCaptureDims(out string) (screen, dims string) {
+	idx, sepLen := strings.LastIndex(out, "\x1f"), 1
+	if j := strings.LastIndex(out, `\037`); j > idx {
+		idx, sepLen = j, len(`\037`)
+	}
+	if idx < 0 {
+		return out, ""
+	}
+	return strings.TrimSuffix(out[:idx], "\n"), out[idx+sepLen:]
 }
