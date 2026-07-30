@@ -49,3 +49,6 @@ secrets.json
 
 # Personal agent configs — not part of the project
 .claude/agents/
+
+# Stray duplicate of build/appicon.icns — build.sh installs the bundle icon
+build/darwin/iconfile.icns
