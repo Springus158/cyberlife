@@ -174,6 +174,22 @@ func (a *App) WriteITermTextBySessionID(sessionID string, text string, pressEnte
 	return a.itermController.WriteTextBySessionID(sessionID, text, pressEnter)
 }
 
+// PasteClipboardToSession pastes the OS clipboard into a session as one
+// bracketed paste, so multi-line text arrives without firing Enter per line
+func (a *App) PasteClipboardToSession(sessionID string) error {
+	if a.itermController == nil {
+		return fmt.Errorf("iTerm controller not initialized")
+	}
+	text, err := runtime.ClipboardGetText(a.ctx)
+	if err != nil {
+		return fmt.Errorf("clipboard read failed: %w", err)
+	}
+	if text == "" {
+		return nil
+	}
+	return a.itermController.PasteTextBySessionID(sessionID, text)
+}
+
 // SendITermSpecialKey sends a special key sequence to a specific iTerm2 session
 func (a *App) SendITermSpecialKey(sessionID string, key string) error {
 	if a.itermController == nil {

@@ -132,6 +132,13 @@ function handleCmdShortcuts(e) {
     toggleTermMenu();
     return true;
   }
+  // ⌘V outside INSERT has no focused field to paste into — route the
+  // clipboard to the viewed session; INSERT keeps the native paste
+  if (!e.shiftKey && key === 'v' && getMode() !== 'insert' && window.itermIsViewingSession?.()) {
+    e.preventDefault();
+    window.itermPasteClipboard?.();
+    return true;
+  }
   if (!e.shiftKey && key === 'p') {
     e.preventDefault();
     togglePomodoro();
@@ -213,6 +220,12 @@ function handleTermKey(e) {
 
   if (e.ctrlKey) {
     const k = e.key.toLowerCase();
+    // Ctrl+Shift+V — the terminal paste convention on Linux
+    if (e.shiftKey && k === 'v') {
+      e.preventDefault();
+      window.itermPasteClipboard?.();
+      return;
+    }
     if (TERM_CTRL_KEYS.has(k)) {
       e.preventDefault();
       window.itermSendKey?.('ctrl-' + k);

@@ -10,7 +10,7 @@ import { loadClaudeAccounts, buildAccountOptions, attachAccountSelect } from './
 import { buildGroupOptions, toggleGroupCollapsed, deleteGroup, openGroupModal } from './project-groups.js';
 import { refreshGitStatus } from './git.js';
 import { renderTabbedIconPicker } from './icon-catalog.js';
-import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies } from '../../wailsjs/go/main/App';
+import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies } from '../../wailsjs/go/main/App';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { getMode, setMode } from './shell.js';
 import { toggleTermMenu } from './term-menu.js';
@@ -391,6 +391,7 @@ function termHintBarContent() {
       ${chip('termAttachToggle', '⌃U', 'detach')}
       ${chip('termMenuToggle', '⌘M', 'menu')}
       ${chip('itermToggleVoice', '⌘R', 'voice')}
+      ${chip(null, '⌘V', 'paste')}
       ${chip(null, 'Esc', 'interrupt Claude')}
     `;
   }
@@ -910,6 +911,16 @@ window.itermSendKey = async function(key) {
     await SendITermSpecialKey(targetSession, key);
   } catch (err) {
     console.error('Failed to send key:', err);
+  }
+};
+
+window.itermPasteClipboard = async function() {
+  const targetSession = dashboardState.viewingSessionId;
+  if (!targetSession) return;
+  try {
+    await PasteClipboardToSession(targetSession);
+  } catch (err) {
+    console.error('Failed to paste clipboard:', err);
   }
 };
 

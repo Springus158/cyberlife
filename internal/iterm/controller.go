@@ -776,6 +776,15 @@ end tell
 	return nil
 }
 
+// PasteTextBySessionID delivers text as a single tmux bracketed paste; the
+// receiving program sees one paste event instead of typed lines
+func (c *Controller) PasteTextBySessionID(sessionID, text string) error {
+	if isTmuxSessionID(sessionID) {
+		return c.tmuxPasteText(tmuxNameFromID(sessionID), text)
+	}
+	return c.WriteTextBySessionID(sessionID, text, false)
+}
+
 // SendSpecialKeyBySessionID sends a special key/control sequence to a specific session
 func (c *Controller) SendSpecialKeyBySessionID(sessionID string, key string) error {
 	if isTmuxSessionID(sessionID) {

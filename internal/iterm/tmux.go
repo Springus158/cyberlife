@@ -186,6 +186,29 @@ var tmuxKeyNames = map[string]string{
 	"enter":     "Enter",
 }
 
+// tmuxPasteText stages the text in a tmux buffer (load-buffer reads stdin, so
+// no command-line quoting touches the payload) and pastes it with -p, which
+// wraps it in bracketed-paste markers when the program asked for them.
+func (c *Controller) tmuxPasteText(name, text string) error {
+	bin := findTmuxPath()
+	if bin == "" {
+		return fmt.Errorf("tmux not found")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	load := exec.CommandContext(ctx, bin, "load-buffer", "-b", "cyberlife-paste", "-")
+	load.Stdin = strings.NewReader(text)
+	if out, err := load.CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux load-buffer: %s", strings.TrimSpace(string(out)))
+	}
+	target := tmuxPaneTarget(name)
+	if c.tmuxControlCommand("paste-buffer -p -d -b cyberlife-paste -t " + tmuxQuote(target)) {
+		return nil
+	}
+	_, err := tmuxExec("paste-buffer", "-p", "-d", "-b", "cyberlife-paste", "-t", target)
+	return err
+}
+
 func writeTmuxText(name, text string, pressEnter bool) error {
 	target := tmuxPaneTarget(name)
 	if text != "" {
