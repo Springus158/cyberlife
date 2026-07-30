@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <!-- Injected markup must never become executable: no inline scripts, no
+         remote code, and network access limited to the local agent API.
+         data:/file: images are needed for screenshots and mail attachments. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' http://127.0.0.1:8377; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: blob: http://127.0.0.1:8377; font-src 'self' data:; connect-src 'self' http://127.0.0.1:8377 ws://127.0.0.1:* wails://*; frame-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'"/>
+    <title>Cyber Life</title>
+</head>
+<body>
+<div id="app"></div>
+<script src="./src/main.js" type="module"></script>
+</body>
+</html>

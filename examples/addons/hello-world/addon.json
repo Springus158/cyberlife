@@ -1,0 +1,18 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "icon": "👋",
+  "version": "0.1.0",
+  "description": "Minimal example addon: one sidebar/dashboard widget, persisted storage, app events and a core API call.",
+  "author": "Cyber Life contributors",
+  "category": "development",
+  "tags": ["example", "starter"],
+  "entry": "main.js",
+  "permissions": ["projects"],
+  "widgets": [
+    { "id": "hello-world.greeting", "title": "Hello World", "icon": "👋", "description": "Example addon widget", "dashboard": true }
+  ],
+  "modules": [
+    { "id": "hello-world.page", "label": "Hello", "icon": "👋" }
+  ]
+}

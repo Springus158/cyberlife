@@ -1,0 +1,51 @@
+# Build artifacts - ignore bin output but keep config files
+build/bin/
+!build/appicon.png
+!build/appicon.icns
+!build/darwin/
+!build/windows/
+!build/README.md
+cyberlife
+CyberLife
+*.exe
+frontend/package.json.md5
+scripts/voice_input
+
+# Dependencies
+node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local agent config
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Secrets & State (in case copied to repo)
+state.json
+*.secret
+*.key
+*.pem
+credentials.json
+secrets.json
+
+# App data (should be in ~/.cyberlife but just in case)
+.cyberlife/
+
+# Personal agent configs — not part of the project
+.claude/agents/
