@@ -48,7 +48,16 @@ case "$(uname -s)" in
     # No Swift helper (dictation needs Speech.framework) and no code signing.
     # iTerm2 is absent too, which the app already treats as normal — tmux is
     # the session backend on both platforms.
-    "$WAILS" build -devtools "$@"
+
+    # Wails compiles against webkit2gtk-4.0 by default, but newer distros
+    # (Ubuntu 24.04+) only ship 4.1 — build with the matching tag.
+    TAGS=()
+    if ! pkg-config --exists webkit2gtk-4.0 2>/dev/null \
+        && pkg-config --exists webkit2gtk-4.1 2>/dev/null; then
+      TAGS=(-tags webkit2_41)
+    fi
+
+    "$WAILS" build -devtools "${TAGS[@]}" "$@"
     echo "✓ Build complete: $PROJECT_DIR/build/bin/CyberLife"
     echo "  Run: ./build/bin/CyberLife"
     ;;

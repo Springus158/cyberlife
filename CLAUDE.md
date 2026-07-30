@@ -28,12 +28,12 @@ same command works on both:
 
 **macOS** — produces a signed `.app`:
 ```bash
-pkill -f "CyberLife.app/Contents/MacOS/CyberLife" 2>/dev/null; bash build.sh && open build/bin/CyberLife.app
+pkill -f "[C]yberLife.app/Contents/MacOS/CyberLife" 2>/dev/null; bash build.sh && open build/bin/CyberLife.app
 ```
 
 **Linux** — produces a plain binary:
 ```bash
-pkill -f "build/bin/CyberLife" 2>/dev/null; bash build.sh && ./build/bin/CyberLife
+pkill -f "[b]uild/bin/CyberLife" 2>/dev/null; bash build.sh && ./build/bin/CyberLife
 ```
 
 Always kill the running instance first: two instances fight over the same
