@@ -294,18 +294,18 @@ function removeRow(threadId) {
   const wasSelected = emailState.selectedId === threadId;
   const [row] = emailState.threads.splice(index, 1);
   if (wasSelected) {
+    emailState.selectedId = null;
+    emailState.openThread = null;
+  }
+  renderThreadList();
+  if (wasSelected) {
     // Gmail-style auto-advance: open whatever now sits at this position
     const next = emailState.threads[Math.min(index, emailState.threads.length - 1)];
     if (next) {
       openThread(next.id);
     } else {
-      emailState.selectedId = null;
-      emailState.openThread = null;
       renderReadingPane();
-      renderThreadList();
     }
-  } else {
-    renderThreadList();
   }
   return { row, index };
 }
