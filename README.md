@@ -4,7 +4,7 @@
 
 Cyber Life is a desktop cockpit where AI agents are first-class citizens: it runs your agent sessions in tmux, gives them a local API to manage your kanban board, mail, notes, automations and health checks — and lets you (or your agents) extend the whole system with **addons**.
 
-Built with [Wails](https://wails.io/) (Go + vanilla JS). macOS today, Linux port in progress.
+Built with [Wails](https://wails.io/) (Go + vanilla JS). macOS and Linux; dictation and the iTerm2 escape hatch are macOS-only.
 
 ![Cyber Life Screenshot](assets/screenshot.png)
 
@@ -29,22 +29,33 @@ Agents can go further and **extend the system itself** — see [Addons](#addons)
 
 ### 2. Build & run
 
-Requirements: macOS 12+, Go 1.25+, Node.js 18+, Wails CLI v2.11+.
+Requirements: macOS 12+ or a Linux desktop, Go 1.25+, Node.js 18+, Wails CLI
+v2.11+, tmux. On Linux you also need GTK3 and WebKit2GTK development headers.
+
+Rather than collecting those by hand, clone and ask the doctor:
 
 ```bash
-xcode-select --install
-brew install go node
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
 git clone https://github.com/kalor62/cyberlife.git
 cd cyberlife
-cd frontend && npm install && cd ..
-bash build.sh
 
-open build/bin/CyberLife.app
+bash scripts/doctor.sh              # what is missing, per platform
+bash scripts/doctor.sh --install    # install it (sudo for system packages)
+
+bash build.sh
 ```
 
-Development mode with hot reload: `wails dev`.
+`build.sh` detects the platform: a signed `.app` on macOS (`open
+build/bin/CyberLife.app`), a plain binary on Linux
+(`./build/bin/CyberLife`). Development mode with hot reload: `wails dev`.
+
+Or just tell your agent *"run Cyber Life for me"* — `CLAUDE.md` carries the
+whole recipe, including the Linux headers and the PATH fix for `wails`.
+
+**Platform notes.** Sessions are tmux on both platforms, so they run, stream
+and survive restarts everywhere. Two optional pieces are macOS-only and
+degrade quietly: dictation (Swift + `Speech.framework` — on Linux use the
+ElevenLabs engine) and the iTerm2 escape hatch that opens a session in a real
+terminal window.
 
 ### 3. Learn the keys
 

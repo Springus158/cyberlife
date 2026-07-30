@@ -6,23 +6,62 @@ capabilities (API groups + skills).
 
 ## Build & Run
 
-When building and running the app, ALWAYS follow this sequence:
+Asked to "run Cyber Life" from a fresh clone? Start with the doctor — it names
+everything missing and installs it on request. Do not guess at package names,
+and do not skip it because `build.sh` looks like a one-liner: on Linux the
+build fails without GTK and WebKit2GTK development headers.
 
-1. Kill any running instance first: `pkill -f "CyberLife.app/Contents/MacOS/CyberLife" 2>/dev/null || true`
-2. Build: `bash build.sh`
-3. Launch: `open build/bin/CyberLife.app`
+```bash
+bash scripts/doctor.sh              # report what is missing
+bash scripts/doctor.sh --install    # install it (needs sudo for system packages)
+```
 
-One-liner:
+If the doctor reports `wails` missing after installing Go, Go's bin directory
+is not on PATH yet:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+Then build and launch. `build.sh` picks the right path for the platform, so the
+same command works on both:
+
+**macOS** — produces a signed `.app`:
 ```bash
 pkill -f "CyberLife.app/Contents/MacOS/CyberLife" 2>/dev/null; bash build.sh && open build/bin/CyberLife.app
 ```
+
+**Linux** — produces a plain binary:
+```bash
+pkill -f "build/bin/CyberLife" 2>/dev/null; bash build.sh && ./build/bin/CyberLife
+```
+
+Always kill the running instance first: two instances fight over the same
+state file and the same port (8377).
+
+The app needs a graphical session. Over plain SSH it will fail to open a
+window — say so rather than retrying, and check `$DISPLAY` / `$WAYLAND_DISPLAY`
+before blaming the build.
+
+### What is macOS-only
+
+The app runs on Linux; two optional pieces do not, and both degrade quietly:
+
+- **Dictation** — the helper is Swift against `Speech.framework`. On Linux the
+  ElevenLabs engine covers speech-to-text instead.
+- **iTerm2 escape hatch** — opening a session in a real terminal window uses
+  AppleScript. Sessions themselves are tmux on both platforms, so they still
+  run, stream and survive restarts.
+
+Never "fix" a Linux build by stripping these — they are already guarded by
+`platform.IsMac()` and `runtime.GOOS` checks.
 
 ## Tech Stack
 
 - **Backend**: Go + Wails v2
 - **Frontend**: Vanilla JS (no framework)
-- **Desktop**: macOS .app bundle
-- **Terminal Integration**: tmux control mode (sessions), iTerm2 via AppleScript (optional escape hatch)
+- **Desktop**: macOS `.app` bundle; plain binary on Linux (GTK3 + WebKit2GTK)
+- **Terminal Integration**: tmux control mode (sessions), iTerm2 via AppleScript (optional, macOS)
 
 ## Key Conventions
 
@@ -30,3 +69,4 @@ pkill -f "CyberLife.app/Contents/MacOS/CyberLife" 2>/dev/null; bash build.sh && 
 - Frontend modules are in `frontend/src/modules/`
 - Wails bindings are auto-generated during build in `frontend/wailsjs/`
 - Sessions are tmux-only; content streams via `tmux -C` control mode (no Python bridge)
+- OS-specific work goes through `internal/platform`, never a bare `exec.Command("open", …)`

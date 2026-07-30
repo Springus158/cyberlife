@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/kalor62/cyberlife/internal/logging"
+	"github.com/kalor62/cyberlife/internal/platform"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -44,6 +45,12 @@ func (a *App) SetVoiceAutoSubmit(enabled bool) {
 // StartVoiceRecognition starts native macOS speech recognition.
 // Returns "OK" on success or "ERROR: ..." on failure.
 func (a *App) StartVoiceRecognition(lang string) string {
+	// The helper is Swift against Speech.framework, so there is nothing to
+	// compile or run elsewhere — say so instead of failing on a missing swiftc.
+	if !platform.IsMac() {
+		return "ERROR: dictation needs macOS (Speech.framework); use the ElevenLabs engine instead"
+	}
+
 	a.voiceMu.Lock()
 	defer a.voiceMu.Unlock()
 

@@ -754,11 +754,20 @@ func (a *App) CheckDependencies() []DependencyStatus {
 		}
 	}
 
-	return []DependencyStatus{
+	// Install hints have to name the platform's own package manager, or they
+	// send a Linux user to a command that does not exist there.
+	install := func(mac, linux string) string {
+		if platform.IsMac() {
+			return mac
+		}
+		return linux
+	}
+
+	deps := []DependencyStatus{
 		{
 			ID: "tmux", Name: "tmux", OK: tmuxPath != "", Required: true, Path: tmuxPath,
 			Purpose: "Runs every session — sessions survive app restarts and stream into the dashboard",
-			Hint:    "brew install tmux",
+			Hint:    install("brew install tmux", "sudo apt install tmux"),
 		},
 		{
 			ID: "claude", Name: "Claude Code CLI", OK: claudePath != "", Required: true, Path: claudePath,
@@ -766,16 +775,21 @@ func (a *App) CheckDependencies() []DependencyStatus {
 			Hint:    "npm install -g @anthropic-ai/claude-code",
 		},
 		{
+			ID: "node", Name: "Node.js", OK: nodePath != "", Required: false, Path: nodePath,
+			Purpose: "Optional — powers the built-in Gmail MCP server",
+			Hint:    install("brew install node", "sudo apt install nodejs npm"),
+		},
+	}
+	// iTerm2 is a macOS application; on Linux the row would only ever be a
+	// permanent failure for something the platform cannot have.
+	if platform.IsMac() {
+		deps = append(deps, DependencyStatus{
 			ID: "iterm", Name: "iTerm2", OK: itermErr == nil, Required: false,
 			Purpose: "Optional — open a session in a real terminal window (o / ⤴)",
 			Hint:    "brew install --cask iterm2",
-		},
-		{
-			ID: "node", Name: "Node.js", OK: nodePath != "", Required: false, Path: nodePath,
-			Purpose: "Optional — powers the built-in Gmail MCP server",
-			Hint:    "brew install node",
-		},
+		})
 	}
+	return deps
 }
 
 func (a *App) GetRunners() []state.Runner {
