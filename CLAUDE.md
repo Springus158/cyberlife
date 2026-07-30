@@ -39,6 +39,12 @@ pkill -f "[b]uild/bin/CyberLife" 2>/dev/null; bash build.sh && ./build/bin/Cyber
 Always kill the running instance first: two instances fight over the same
 state file and the same port (8377).
 
+`wails build` regenerates `frontend/wailsjs/runtime/` from whichever CLI you
+have, so a different Wails version leaves a diff there that has nothing to do
+with your change. Leave those files out of the commit unless updating the
+bindings is the point of it — `bash scripts/doctor.sh` prints the version so
+the cause is obvious.
+
 The app needs a graphical session. Over plain SSH it will fail to open a
 window — say so rather than retrying, and check `$DISPLAY` / `$WAYLAND_DISPLAY`
 before blaming the build.

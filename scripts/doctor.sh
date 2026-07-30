@@ -69,7 +69,10 @@ have go "Go (1.25+)" required "$PKG_GO" "go version"
 WAILS_BIN="$(command -v wails || true)"
 [ -z "$WAILS_BIN" ] && [ -x "$HOME/go/bin/wails" ] && WAILS_BIN="$HOME/go/bin/wails"
 if [ -n "$WAILS_BIN" ]; then
-  ok "Wails CLI" "$WAILS_BIN"
+  # The version matters beyond "present": wails regenerates
+  # frontend/wailsjs/runtime/ on every build, so a different CLI rewrites those
+  # tracked files. Show it, so a surprise diff has an obvious cause.
+  ok "Wails CLI" "$("$WAILS_BIN" version 2>/dev/null | head -1) ($WAILS_BIN)"
 else
   bad "Wails CLI" "missing — go install github.com/wailsapp/wails/v2/cmd/wails@latest"
   missing+=("go install github.com/wailsapp/wails/v2/cmd/wails@latest")
