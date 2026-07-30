@@ -1604,8 +1604,6 @@ function updateStyledOutputViewer() {
     return;
   }
 
-  viewer.classList.toggle('term-attached', window.shellGetMode?.() === 'term');
-
   const allLines = dashboardState.styledLines;
   if (!allLines) {
     viewer.textContent = '';

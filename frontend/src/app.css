@@ -4022,11 +4022,6 @@ body.wails-fullscreen .titlebar-drag-region {
   50% { background: transparent; color: inherit; }
 }
 
-.iterm-output-viewer.term-attached {
-  outline: 2px solid #e3b341;
-  outline-offset: -2px;
-}
-
 /* ============================================
    Hint mode (f): Vimium-style click labels
    ============================================ */
