@@ -656,10 +656,6 @@ window.itermSendText = async function(text) {
   try {
     const wrapped = window.applyPromptWrappers ? window.applyPromptWrappers(text) : text;
     await WriteITermTextBySessionID(targetSession, wrapped, true);
-    // Save to prompt history (skip short commands like single keys) — store original, not wrapped
-    if (window.savePromptToHistory && text.length > 5) {
-      window.savePromptToHistory(text);
-    }
   } catch (err) {
     console.error('Failed to send text:', err);
   }
@@ -1020,10 +1016,6 @@ window.itermSendPinnedPrompt = async function(promptId, isGlobal) {
     const wrapped = window.applyPromptWrappers ? window.applyPromptWrappers(prompt.content) : prompt.content;
     await WriteITermTextBySessionID(targetSession, wrapped, true);
     await IncrementPromptUsage(state.activeProject?.id, promptId, isGlobal);
-    // Save to prompt history (original, not wrapped)
-    if (window.savePromptToHistory && prompt.content.length > 5) {
-      window.savePromptToHistory(prompt.content);
-    }
   } catch (err) {
     console.error('Failed to send pinned prompt:', err);
   }
@@ -1164,9 +1156,6 @@ function voiceSubmitText(text) {
     // No auto-submit: drop the text into the session's own prompt unsent so
     // it can still be edited there before Enter
     WriteITermTextBySessionID(targetSession, text, false);
-  }
-  if (window.savePromptToHistory && text.length > 5) {
-    window.savePromptToHistory(text);
   }
 }
 

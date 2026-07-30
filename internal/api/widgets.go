@@ -23,7 +23,6 @@ type widgetInfo struct {
 
 func widgetCatalog() []widgetInfo {
 	return []widgetInfo{
-		{ID: "prompt-history", Title: "Prompt History", Icon: "💬", Description: "Prompts sent in the active project", Dashboard: false},
 		{ID: "git", Title: "Git", Icon: "🌿", Description: "Working tree status and diffs for the active project", Dashboard: false},
 		{ID: "pomodoro", Title: "Pomodoro", Icon: "🍅", Description: "Focus timer", Dashboard: false},
 		{ID: "notes", Title: "Notes", Icon: "📝", Description: "Project notes quick view", Dashboard: false},

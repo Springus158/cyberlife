@@ -10,8 +10,6 @@ import {gmail} from '../models';
 
 export function AddKanbanComment(arg1:string,arg2:string,arg3:string,arg4:string):Promise<state.KanbanComment>;
 
-export function AddPromptHistory(arg1:string,arg2:string):Promise<state.PromptHistoryItem>;
-
 export function AddonStorageAll(arg1:string):Promise<Record<string, string>>;
 
 export function AddonStorageDelete(arg1:string,arg2:string):Promise<void>;
@@ -23,8 +21,6 @@ export function AddonsList():Promise<main.AddonsInfo>;
 export function AddonsReload():Promise<main.AddonsInfo>;
 
 export function CheckDependencies():Promise<Array<main.DependencyStatus>>;
-
-export function ClearPromptHistory(arg1:string):Promise<void>;
 
 export function ClearTerminalAccount(arg1:string):Promise<void>;
 
@@ -73,8 +69,6 @@ export function DeleteProjectTask(arg1:string,arg2:string,arg3:boolean,arg4:bool
 export function DeletePrompt(arg1:string,arg2:string):Promise<void>;
 
 export function DeletePromptCategory(arg1:string,arg2:string,arg3:boolean):Promise<void>;
-
-export function DeletePromptHistory(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteRunner(arg1:string):Promise<void>;
 
@@ -169,10 +163,6 @@ export function GetProjectWidgets(arg1:string):Promise<Array<string>>;
 export function GetProjects():Promise<Array<state.ProjectState>>;
 
 export function GetPromptCategories(arg1:string):Promise<Array<state.PromptCategory>>;
-
-export function GetPromptHistory(arg1:string,arg2:number,arg3:number):Promise<Array<state.PromptHistoryItem>>;
-
-export function GetPromptHistoryCount(arg1:string):Promise<number>;
 
 export function GetRunners():Promise<Array<state.Runner>>;
 

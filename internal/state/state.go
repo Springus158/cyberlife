@@ -358,9 +358,6 @@ type ProjectState struct {
 	// Sidebar widgets shown only in this project (on top of the global ones)
 	SidebarWidgets []string `json:"sidebarWidgets,omitempty"`
 
-	// Prompt history - prompts sent in this project
-	PromptHistory []PromptHistoryItem `json:"promptHistory"`
-
 	// Metadata
 	EnvVars    map[string]string `json:"envVars"`
 	LastOpened time.Time         `json:"lastOpened"`
@@ -388,13 +385,6 @@ type PromptCategory struct {
 	IsGlobal bool   `json:"isGlobal"`
 }
 
-// PromptHistoryItem represents a prompt sent in a project
-type PromptHistoryItem struct {
-	ID        string    `json:"id"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
 // NewAppState creates a new empty app state
 func NewAppState() *AppState {
 	return &AppState{
@@ -415,7 +405,6 @@ func NewProjectState(id, name, path, color, icon string) *ProjectState {
 		EnvVars:          make(map[string]string),
 		Prompts:          []Prompt{},
 		PromptCategories: []PromptCategory{},
-		PromptHistory:    []PromptHistoryItem{},
 		LastOpened:       now,
 		CreatedAt:        now,
 	}

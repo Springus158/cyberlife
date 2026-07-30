@@ -22,7 +22,6 @@ import {
 // legacy: id of an existing DOM section adopted as-is (sidebar only).
 // render: instance-safe renderer usable in both sidebar and dashboards.
 export const WIDGETS = [
-  { id: 'prompt-history', title: 'Prompt History', icon: '💬', legacy: 'promptHistorySection' },
   { id: 'git', title: 'Git', icon: '🌿', legacy: 'gitSection' },
   { id: 'pomodoro', title: 'Pomodoro', icon: '🍅', legacy: 'pomodoroSection', builtin: 'pomodoro' },
   { id: 'notes', title: 'Notes', icon: '📝', legacy: 'notesSection' },
@@ -103,7 +102,7 @@ export async function initWidgets() {
     ws.moduleWidths = s.moduleWidths || {};
   } catch (err) {
     console.warn('Widget settings unavailable, using defaults:', err);
-    ws.global = ['prompt-history', 'git', 'pomodoro'];
+    ws.global = ['git', 'pomodoro'];
   }
   await loadProjectWidgets();
   ws.loaded = true;

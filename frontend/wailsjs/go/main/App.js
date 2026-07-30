@@ -6,10 +6,6 @@ export function AddKanbanComment(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['AddKanbanComment'](arg1, arg2, arg3, arg4);
 }
 
-export function AddPromptHistory(arg1, arg2) {
-  return window['go']['main']['App']['AddPromptHistory'](arg1, arg2);
-}
-
 export function AddonStorageAll(arg1) {
   return window['go']['main']['App']['AddonStorageAll'](arg1);
 }
@@ -32,10 +28,6 @@ export function AddonsReload() {
 
 export function CheckDependencies() {
   return window['go']['main']['App']['CheckDependencies']();
-}
-
-export function ClearPromptHistory(arg1) {
-  return window['go']['main']['App']['ClearPromptHistory'](arg1);
 }
 
 export function ClearTerminalAccount(arg1) {
@@ -132,10 +124,6 @@ export function DeletePrompt(arg1, arg2) {
 
 export function DeletePromptCategory(arg1, arg2, arg3) {
   return window['go']['main']['App']['DeletePromptCategory'](arg1, arg2, arg3);
-}
-
-export function DeletePromptHistory(arg1, arg2) {
-  return window['go']['main']['App']['DeletePromptHistory'](arg1, arg2);
 }
 
 export function DeleteRunner(arg1) {
@@ -324,14 +312,6 @@ export function GetProjects() {
 
 export function GetPromptCategories(arg1) {
   return window['go']['main']['App']['GetPromptCategories'](arg1);
-}
-
-export function GetPromptHistory(arg1, arg2, arg3) {
-  return window['go']['main']['App']['GetPromptHistory'](arg1, arg2, arg3);
-}
-
-export function GetPromptHistoryCount(arg1) {
-  return window['go']['main']['App']['GetPromptHistoryCount'](arg1);
 }
 
 export function GetRunners() {

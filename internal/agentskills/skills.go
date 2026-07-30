@@ -502,7 +502,7 @@ project (in that order).
 
     curl -s %s/api/widgets/catalog
     curl -s %s/api/widgets
-    curl -s -X POST %s/api/widgets/sidebar -d '{"sidebar":["prompt-history","git","recent-automations"]}'
+    curl -s -X POST %s/api/widgets/sidebar -d '{"sidebar":["git","pomodoro","recent-automations"]}'
     curl -s -X POST %s/api/widgets/dashboard -d '{"dashboard":{"name":"Ops","icon":"🛠️","widgets":["board-summary","recent-automations"]}}'
 
 ## Conventions

@@ -8,7 +8,7 @@ import (
 )
 
 func defaultWidgetSettings() *WidgetSettings {
-	return &WidgetSettings{Sidebar: []string{"prompt-history", "git", "pomodoro"}}
+	return &WidgetSettings{Sidebar: []string{"git", "pomodoro"}}
 }
 
 func (m *Manager) GetWidgetSettings() WidgetSettings {

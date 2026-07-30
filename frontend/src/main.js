@@ -70,15 +70,6 @@ import {
   renderPomodoro
 } from './modules/pomodoro.js';
 
-// Prompt history module
-import {
-  initPromptHistory,
-  initPromptHistoryHandler,
-  loadPromptHistory,
-  renderPromptHistory,
-  savePromptToHistory
-} from './modules/prompt-history.js';
-
 // Terminal dashboard module (center panel)
 import {
   initTerminalDashboard,
@@ -168,7 +159,6 @@ async function init() {
   // Initialize project switcher handlers
   initModuleHostHandler({ switchTab });
   initNotesHandler();
-  initPromptHistoryHandler();
   initTerminalDashboardHandler();
   initGitHandler();
   initToolsPanelHandler();
@@ -266,14 +256,6 @@ async function init() {
 
   // Initialize pomodoro (after render, NOT project specific)
   initPomodoro();
-
-  // Initialize prompt history (right sidebar)
-  initPromptHistory();
-
-  renderPromptHistory();
-
-  // Expose savePromptToHistory for terminal input
-  window.savePromptToHistory = savePromptToHistory;
 
   // Initialize terminal dashboard (center panel)
   initTerminalDashboard();
@@ -437,9 +419,6 @@ function render() {
           <div class="widget-area" id="widgetArea"></div>
           <!-- Legacy widget sections wait here until widgets.js places them -->
           <div id="widgetStash" style="display: none;">
-            <div class="sidebar-section" id="promptHistorySection">
-              <!-- Prompt history rendered by prompt-history.js -->
-            </div>
             <div class="sidebar-section git-section" id="gitSection">
               <div class="git-section-resizer" id="gitSectionResizer"></div>
               <div class="git-header" id="gitHeader">
