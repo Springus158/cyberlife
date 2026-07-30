@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kalor62/cyberlife/internal/logging"
@@ -20,12 +21,70 @@ const tmuxControlCols, tmuxControlRows = 200, 50
 // and recaptures the pane whenever tmux reports activity, so styled content
 // streams without iTerm2 or the Python bridge.
 type tmuxControlWatcher struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-	events chan struct{}
-	stop   chan struct{}
-	done   chan struct{}
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	writeMu sync.Mutex
+	stdout  io.ReadCloser
+	events  chan struct{}
+	stop    chan struct{}
+	done    chan struct{}
+}
+
+func (w *tmuxControlWatcher) sendCommand(cmd string) error {
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
+	_, err := io.WriteString(w.stdin, cmd+"\n")
+	return err
+}
+
+// tmuxControlCommand runs a tmux command through the attached control client's
+// stdin — no process spawn, so keystrokes reach the session with minimal
+// latency. Any session can be targeted through it (commands are server-wide).
+// Returns false when no control client is attached or the write fails; the
+// caller falls back to tmuxExec.
+func (c *Controller) tmuxControlCommand(cmd string) bool {
+	c.tmuxMu.Lock()
+	w := c.tmuxControl
+	c.tmuxMu.Unlock()
+	if w == nil {
+		return false
+	}
+	if err := w.sendCommand(cmd); err != nil {
+		logging.Debug("tmux control write failed, falling back to exec", "error", err)
+		return false
+	}
+	return true
+}
+
+// tmuxQuote wraps a value for tmux's control-mode command parser — unlike the
+// exec path there is no argv boundary, so spaces and quotes in session names
+// must be escaped.
+func tmuxQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
+}
+
+// tmuxSendKeysFast sends literal text hex-encoded (send-keys -H) so no
+// control-mode quoting rules apply to the payload, regardless of content.
+func (c *Controller) tmuxSendKeysFast(name, text string, pressEnter bool) bool {
+	target := tmuxQuote(tmuxPaneTarget(name))
+	if text != "" {
+		var b strings.Builder
+		b.WriteString("send-keys -t ")
+		b.WriteString(target)
+		b.WriteString(" -H")
+		for _, byt := range []byte(text) {
+			fmt.Fprintf(&b, " %02x", byt)
+		}
+		if !c.tmuxControlCommand(b.String()) {
+			return false
+		}
+	}
+	if pressEnter {
+		return c.tmuxControlCommand("send-keys -t " + target + " Enter")
+	}
+	return true
 }
 
 func (c *Controller) startTmuxControlWatch(virtualID, name string, styledHandler func(*StyledContent)) error {
@@ -61,7 +120,9 @@ func (c *Controller) startTmuxControlWatch(virtualID, name string, styledHandler
 	// Windows keep their 80x24 default size unless some client dictates one;
 	// only do it when no real client is attached so we never fight iTerm.
 	if tty, _ := tmuxHostClient(); tty == "" {
-		fmt.Fprintf(stdin, "refresh-client -C %dx%d\n", tmuxControlCols, tmuxControlRows)
+		if err := w.sendCommand(fmt.Sprintf("refresh-client -C %dx%d", tmuxControlCols, tmuxControlRows)); err != nil {
+			logging.Debug("tmux control refresh-client failed", "error", err)
+		}
 	}
 
 	go w.readLoop()
@@ -101,6 +162,9 @@ func (w *tmuxControlWatcher) captureLoop(c *Controller, virtualID, name string, 
 	}
 	emit()
 
+	const minCaptureGap = 25 * time.Millisecond
+	var lastCapture time.Time
+
 	// Safety net for changes with no notification (copy-mode scroll, missed events)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -114,14 +178,18 @@ func (w *tmuxControlWatcher) captureLoop(c *Controller, virtualID, name string, 
 			logging.Info("tmux control client exited", "session", name)
 			return
 		case <-w.events:
-			// Let a burst of output settle, then drain and capture once;
-			// kept short so typed characters echo without visible lag
-			time.Sleep(20 * time.Millisecond)
-			select {
-			case <-w.events:
-			default:
+			// Leading edge: an isolated change (a typed character echoing) is
+			// captured immediately. Only when changes arrive faster than
+			// minCaptureGap does the wait kick in, coalescing output bursts.
+			if since := time.Since(lastCapture); since < minCaptureGap {
+				time.Sleep(minCaptureGap - since)
+				select {
+				case <-w.events:
+				default:
+				}
 			}
 			emit()
+			lastCapture = time.Now()
 		case <-ticker.C:
 			emit()
 		}
@@ -131,7 +199,9 @@ func (w *tmuxControlWatcher) captureLoop(c *Controller, virtualID, name string, 
 func (w *tmuxControlWatcher) close() {
 	close(w.stop)
 	// Ask the client to detach; fall back to killing it
-	fmt.Fprintln(w.stdin, "detach-client")
+	if err := w.sendCommand("detach-client"); err != nil {
+		logging.Debug("tmux control detach failed", "error", err)
+	}
 	select {
 	case <-w.done:
 	case <-time.After(500 * time.Millisecond):

@@ -917,26 +917,31 @@ window.itermSendKey = async function(key) {
   }
 };
 
-// TERM mode pass-through: batch keystrokes typed within one frame into a
-// single send so fast typing doesn't queue an exec per character
+// TERM mode pass-through, leading edge first: the first keystroke is sent
+// immediately so its echo isn't delayed, and only keystrokes arriving while
+// a send is pending get batched into one follow-up flush
 let typeBuffer = '';
-let typeFlushTimer = null;
+let typeFlushPending = false;
+
+function flushTypeBuffer() {
+  const targetSession = dashboardState.viewingSessionId;
+  const chunk = typeBuffer;
+  typeBuffer = '';
+  if (!chunk || !targetSession) {
+    typeFlushPending = false;
+    return;
+  }
+  WriteITermTextBySessionID(targetSession, chunk, false)
+    .catch((err) => { console.error('Failed to type text:', err); })
+    .finally(flushTypeBuffer);
+}
 
 window.itermTypeText = function(text) {
-  const targetSession = dashboardState.viewingSessionId;
-  if (!targetSession || !text) return;
+  if (!dashboardState.viewingSessionId || !text) return;
   typeBuffer += text;
-  if (typeFlushTimer) return;
-  typeFlushTimer = setTimeout(async () => {
-    typeFlushTimer = null;
-    const chunk = typeBuffer;
-    typeBuffer = '';
-    try {
-      await WriteITermTextBySessionID(targetSession, chunk, false);
-    } catch (err) {
-      console.error('Failed to type text:', err);
-    }
-  }, 16);
+  if (typeFlushPending) return;
+  typeFlushPending = true;
+  flushTypeBuffer();
 };
 
 window.itermIsViewingSession = function() {

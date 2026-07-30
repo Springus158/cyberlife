@@ -705,7 +705,11 @@ end tell
 // WriteTextBySessionID writes text to a specific iTerm2 session by its session ID
 func (c *Controller) WriteTextBySessionID(sessionID string, text string, pressEnter bool) error {
 	if isTmuxSessionID(sessionID) {
-		return writeTmuxText(tmuxNameFromID(sessionID), text, pressEnter)
+		name := tmuxNameFromID(sessionID)
+		if c.tmuxSendKeysFast(name, text, pressEnter) {
+			return nil
+		}
+		return writeTmuxText(name, text, pressEnter)
 	}
 	if !c.IsRunning() {
 		return fmt.Errorf("iTerm2 is not running")
@@ -779,7 +783,11 @@ func (c *Controller) SendSpecialKeyBySessionID(sessionID string, key string) err
 		if !ok {
 			return fmt.Errorf("unknown special key: %s", key)
 		}
-		_, err := tmuxExec("send-keys", "-t", tmuxPaneTarget(tmuxNameFromID(sessionID)), tmuxKey)
+		target := tmuxPaneTarget(tmuxNameFromID(sessionID))
+		if c.tmuxControlCommand("send-keys -t " + tmuxQuote(target) + " " + tmuxKey) {
+			return nil
+		}
+		_, err := tmuxExec("send-keys", "-t", target, tmuxKey)
 		return err
 	}
 	if !c.IsRunning() {
