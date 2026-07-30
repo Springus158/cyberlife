@@ -52,3 +52,8 @@ secrets.json
 
 # Stray duplicate of build/appicon.icns — build.sh installs the bundle icon
 build/darwin/iconfile.icns
+
+# Wails regenerates the runtime bindings from whichever CLI is installed, so
+# tracking them turns every version difference into a diff. The Go bindings
+# stay tracked: those change when the app's own API does.
+frontend/wailsjs/runtime/
