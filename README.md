@@ -98,7 +98,7 @@ Addons get real integration for free: their pages join the tab bar, digits, pale
 
 Even built-in integrations (Gmail, Jira, voice dictation, health checks, Pomodoro, iTerm2) are addons you can switch off.
 
-**Agents build addons too.** The `cyberlife-addons` skill teaches any connected agent the manifest format and workflow — ask your agent to *"build me a Cyber Life addon that tracks my habits"* and it can scaffold, install and hot-reload it. Start from [`examples/addons/hello-world`](examples/addons/hello-world).
+**Agents build addons too.** The `cyberlife-addons` skill teaches any connected agent the manifest format and workflow — ask your agent to *"build me a Cyber Life addon that tracks my habits"* and it can scaffold, install and hot-reload it. Start from [`addons/hello-world`](addons/hello-world).
 
 ## Governance: a gate-kept core, an open edge
 
@@ -118,6 +118,7 @@ internal/
   iterm/                  tmux control-mode streaming
   state/                  single JSON state (~/.cyberlife/state.json)
 frontend/src/modules/     vanilla JS modules (shell, module-host, addon-host, bus, …)
+addons/hello-world/       the smallest addon — start here to write one
 docs/AGENT-MANUAL.md      how agents extend the system — read this first
 ```
 

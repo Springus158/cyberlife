@@ -80,6 +80,18 @@ function setPinForCurrentProject(tabName) {
 
 // Apply local name overrides to tabs from iTerm2 status
 // Detects out-of-sync: if iTerm2 reverted a renamed tab, local override wins
+// Only tmux-backed sessions can be streamed, so plain iTerm2 tabs never enter
+// the session list — listing them would offer sessions that cannot be watched.
+// Every consumer (Term tabs, Projects badges, quick switcher, task reuse) reads
+// the list through here, so the filter lives at this one door.
+function adoptITermStatus(status) {
+  const tabs = (status?.tabs || []).filter(t => t.sessionId?.startsWith('tmux:'));
+  applyNameOverrides(tabs);
+  const adopted = { ...(status || {}), tabs };
+  dashboardState.itermStatus = adopted;
+  return adopted;
+}
+
 function applyNameOverrides(tabs) {
   if (!tabs) return;
   const overrides = dashboardState.nameOverrides;
@@ -807,10 +819,8 @@ window.itermCreateTab = async function() {
 async function adoptNewTab(previousSessionIds, projectName, tabName, claudeConfigDir, runnerId = '') {
   for (let attempt = 0; attempt < 10; attempt++) {
     await new Promise(r => setTimeout(r, 500));
-    const status = await GetITermStatus();
-    applyNameOverrides(status?.tabs);
-    dashboardState.itermStatus = status;
-    const newTab = (status?.tabs || []).find(t => !previousSessionIds.has(t.sessionId));
+    const status = adoptITermStatus(await GetITermStatus());
+    const newTab = status.tabs.find(t => !previousSessionIds.has(t.sessionId));
     if (newTab) {
       // Force custom name — iTerm2 may have overridden it with profile settings
       newTab.name = tabName;
@@ -1714,13 +1724,9 @@ export function initTerminalDashboard() {
   }).catch(err => console.warn('dependency check failed:', err));
 
   bus.on('session-status-changed', (status) => {
-    dashboardState.itermStatus = status;
-    applyNameOverrides(status?.tabs);
-    if (dashboardState.viewingSessionId && status?.tabs) {
-      const stillExists = status.tabs.some(t => t.sessionId === dashboardState.viewingSessionId);
-      if (!stillExists) {
-        stopViewing();
-      }
+    const { tabs } = adoptITermStatus(status);
+    if (dashboardState.viewingSessionId && !tabs.some(t => t.sessionId === dashboardState.viewingSessionId)) {
+      stopViewing();
     }
     if (isDashboardVisible()) {
       renderTerminalDashboard();
@@ -1800,11 +1806,9 @@ async function refreshDashboardData() {
       GetITermStatus(),
       loadPinnedPrompts()
     ]);
-    applyNameOverrides(status?.tabs);
-    dashboardState.itermStatus = status;
     // Session status has no backend event; this poll is the only source, so
     // it is re-broadcast for the other views that show sessions (Projects)
-    bus.emit('session-status-changed', status);
+    bus.emit('session-status-changed', adoptITermStatus(status));
   } catch (err) {
     console.warn('dashboard refresh failed:', err);
   }

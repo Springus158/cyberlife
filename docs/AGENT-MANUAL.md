@@ -86,7 +86,7 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
 ## Checklist: build an ADDON (the default path)
 
 1. Scaffold `~/.cyberlife/addons/<id>/` — `addon.json` + `main.js`
-   (template: `examples/addons/hello-world`). Manifest fields:
+   (template: `addons/hello-world`). Manifest fields:
    `id` (= folder name, `[a-z0-9-]`), `name`, `icon`, `version`,
    `description`, `category` (productivity | integrations | terminal |
    widgets | automation | appearance | development | other), `tags`,

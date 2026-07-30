@@ -107,7 +107,7 @@ func (m *Manager) SeedSampleData() error {
 			"Addons add whole pages, widgets and integrations — like plugins in WordPress.\n\n"+
 				"Browse Settings → Addons (built-in integrations live there too and can be switched off). "+
 				"Then ask your agent to build one: \"build me a Cyber Life addon that tracks my habits\" — "+
-				"the cyberlife-addons skill teaches it everything. Template: examples/addons/hello-world.", "medium"),
+				"the cyberlife-addons skill teaches it everything. Template: addons/hello-world.", "medium"),
 		sampleTask(backlog, 3, "Link your tools",
 			"Settings → Integrations: Gmail (mail module + mail-triggered automations), Jira (board sync), "+
 				"ElevenLabs (voice dictation with ⌘R). Each one is a built-in addon you can toggle.", "low"),

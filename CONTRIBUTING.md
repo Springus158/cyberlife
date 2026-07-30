@@ -6,7 +6,7 @@ Cyber Life has a deliberately split contribution model: **a gate-kept core and a
 
 ### Core is gate-kept — PRs welcome, review is thorough
 
-The core (everything in this repo outside `addons/` and `examples/`) stays small, coherent and keyboard-first. Core PRs are welcome, with expectations:
+The core (everything in this repo outside `addons/`) stays small, coherent and keyboard-first. Core PRs are welcome, with expectations:
 
 1. **For anything non-trivial, open an issue first.** Describing the problem and approach before writing code saves everyone a rewrite.
 2. **Expect a thorough, conservative review.** The core is a platform every addon builds on — correctness, keyboard support, conventions and scope are all checked, and changes that belong in an addon will be redirected there.
@@ -14,7 +14,7 @@ The core (everything in this repo outside `addons/` and `examples/`) stays small
 
 ### Addons are yours — no permission needed
 
-Most ideas belong in an addon, not in core. Addons live in `~/.cyberlife/addons/` on your machine, need no PR, no review and no waiting — build whatever you want. See `docs/AGENT-MANUAL.md` and `examples/addons/hello-world` for the SDK, or just ask your connected agent to scaffold one (`cyberlife-addons` skill).
+Most ideas belong in an addon, not in core. Addons live in `~/.cyberlife/addons/` on your machine, need no PR, no review and no waiting — build whatever you want. See `docs/AGENT-MANUAL.md` and `addons/hello-world` for the SDK, or just ask your connected agent to scaffold one (`cyberlife-addons` skill).
 
 ### Submitting an official addon
 
