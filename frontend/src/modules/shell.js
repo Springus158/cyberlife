@@ -316,9 +316,9 @@ export function openModuleOrderModal() {
 
 const MODE_LABELS = { normal: 'NORMAL', insert: 'INSERT', term: 'TERM' };
 const MODE_HINTS = {
-  normal: '1-9 modules · Enter/i prompt · ⇧F hints · ? shortcuts',
+  normal: '1-9 modules · a/Enter attach · ⌘M menu · ? shortcuts',
   insert: 'Esc back to NORMAL',
-  term: 'keys go to the session · Ctrl+U to leave',
+  term: 'keys go to the session · ⌘M menu · Ctrl+U to leave',
 };
 
 export function renderStatusBar() {

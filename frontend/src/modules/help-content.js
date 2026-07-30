@@ -100,8 +100,8 @@ you return to the bottom. App-created sessions keep 50k lines of history.
 :::keyboard On the Term module
 - [[kbd:j k]] switch the viewed session
 - [[kbd:n]] new terminal · [[kbd:o]] open in iTerm2
-- [[kbd:Enter]] / [[kbd:i]] focus the command input; empty input + Enter sends a bare Enter
-- [[kbd:a]] attach (TERM mode) · [[kbd:Ctrl U]] detach
+- [[kbd:a]] / [[kbd:i]] / [[kbd:Enter]] attach (TERM mode) · [[kbd:Ctrl U]] detach
+- [[kbd:m]] (or [[kbd:⌘ M]] from any mode) terminal menu — voice input, saved prompts, voice settings
 :::
 
 :::warning iTerm2 is optional
@@ -109,8 +109,8 @@ Sessions appear and stream even with iTerm2 closed. The ⤴ button (or
 [[kbd:o]]) opens a real terminal window on demand.
 :::
 
-Global prompt prefix/suffix (Settings → Global Prompts) wraps everything you
-send from the command input.
+Global prompt prefix/suffix (Settings → Global Prompts) wraps prompts sent
+from the terminal menu and voice input.
 `,
   },
   {

@@ -9,6 +9,7 @@ import { SHORTCUT_SECTIONS, renderSingleSection, sectionForModule, generalSectio
 import { togglePomodoro } from './pomodoro.js';
 import { toggleWidgetSidebar } from './widgets.js';
 import { openCommandPalette, closeCommandPalette, isCommandPaletteOpen } from './command-palette.js';
+import { isTermMenuOpen, toggleTermMenu, handleTermMenuKey } from './term-menu.js';
 
 // g-chord: `g` followed by a module mnemonic within the window
 const G_CHORD_TARGETS = {
@@ -68,6 +69,10 @@ function handleKeydown(e) {
     handleHintKey(e);
     return;
   }
+  if (isTermMenuOpen()) {
+    handleTermMenuKey(e);
+    return;
+  }
   if (isProjectSwitcherOpen()) {
     handleProjectSwitcherKey(e);
     return;
@@ -120,6 +125,11 @@ function handleCmdShortcuts(e) {
   if (!e.shiftKey && key === 'r') {
     e.preventDefault();
     window.itermToggleVoice?.();
+    return true;
+  }
+  if (!e.shiftKey && key === 'm') {
+    e.preventDefault();
+    toggleTermMenu();
     return true;
   }
   if (!e.shiftKey && key === 'p') {
@@ -189,7 +199,17 @@ function handleTermKey(e) {
     setMode('normal');
     return;
   }
-  if (e.metaKey || e.altKey) return;
+  if (e.metaKey) return;
+
+  // Option-composed characters (macOS Polish diacritics: ⌥a → ą) arrive with
+  // altKey set but a printable e.key — they must reach the session
+  if (e.altKey) {
+    if (!e.ctrlKey && e.key.length === 1) {
+      e.preventDefault();
+      window.itermTypeText?.(e.key);
+    }
+    return;
+  }
 
   if (e.ctrlKey) {
     const k = e.key.toLowerCase();
@@ -292,14 +312,7 @@ function handleNormalKey(e) {
       e.preventDefault();
       cycleModule(1);
       return;
-    case 'i': {
-      const input = document.getElementById('itermCommandInput');
-      if (input) {
-        e.preventDefault();
-        input.focus();
-      }
-      return;
-    }
+    case 'i':
     case 'a':
       if (window.itermIsViewingSession?.()) {
         e.preventDefault();
