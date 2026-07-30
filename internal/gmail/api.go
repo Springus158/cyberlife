@@ -84,12 +84,10 @@ type ThreadDetail struct {
 }
 
 func ListLabels(svc *gmailapi.Service) ([]Label, error) {
-	started := time.Now()
 	resp, err := svc.Users.Labels.List("me").Do()
 	if err != nil {
 		return nil, err
 	}
-	listed := time.Since(started)
 	labels := make([]Label, 0, len(resp.Labels))
 	for _, l := range resp.Labels {
 		// Hidden labels stay in the list: they are still applied to mail, so the
@@ -106,12 +104,10 @@ func ListLabels(svc *gmailapi.Service) ([]Label, error) {
 	// those are kept solely so a thread row can resolve its chip.
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, metadataConcurrency)
-	counted := 0
 	for i := range labels {
 		if labels[i].Hidden {
 			continue
 		}
-		counted++
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(idx int) {
@@ -127,9 +123,6 @@ func ListLabels(svc *gmailapi.Service) ([]Label, error) {
 		}(i)
 	}
 	wg.Wait()
-	logging.Debug("gmail labels",
-		"labels", len(labels), "counted", counted, "listMs", listed.Milliseconds(),
-		"countsMs", time.Since(started).Milliseconds()-listed.Milliseconds())
 	return labels, nil
 }
 
@@ -144,12 +137,10 @@ func ListThreads(svc *gmailapi.Service, labelID, query, pageToken string) (*Thre
 	if pageToken != "" {
 		call = call.PageToken(pageToken)
 	}
-	started := time.Now()
 	resp, err := call.Do()
 	if err != nil {
 		return nil, err
 	}
-	listed := time.Since(started)
 
 	page := &ThreadPage{
 		Threads:        make([]ThreadSummary, len(resp.Threads)),
@@ -201,9 +192,6 @@ func ListThreads(svc *gmailapi.Service, labelID, query, pageToken string) (*Thre
 		}(i, t.Id, t.Snippet)
 	}
 	wg.Wait()
-	logging.Debug("gmail thread page",
-		"threads", len(resp.Threads), "listMs", listed.Milliseconds(),
-		"metadataMs", time.Since(started).Milliseconds()-listed.Milliseconds())
 	return page, nil
 }
 
