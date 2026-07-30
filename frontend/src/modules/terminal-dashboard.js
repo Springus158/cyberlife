@@ -397,7 +397,8 @@ function termHintBarContent() {
   return `
     <span class="term-hint-state">NORMAL</span>
     ${chip('termAttachToggle', 'a', 'attach — type into session')}
-    ${chip(null, 'j k', 'switch session')}
+    ${chip(null, 'j k', 'prev/next terminal')}
+    ${chip('openProjectSwitcher', 'p', 'pick project')}
     ${chip('termMenuToggle', 'm', 'menu — voice & prompts')}
     ${chip('itermToggleVoice', '⌘R', 'voice')}
     ${chip(null, 'Esc', 'interrupt Claude')}
