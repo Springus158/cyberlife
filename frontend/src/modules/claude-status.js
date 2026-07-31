@@ -2,6 +2,8 @@ import { state } from './state.js';
 
 // Claude status UI functions
 export function updateClaudeStatusUI(terminalId) {
+  window.itermRefreshProjectBar?.();
+
   const terminalTab = document.querySelector(`.terminal-tab[data-id="${terminalId}"]`);
   if (terminalTab) {
     updateClaudeStatusElement(terminalTab, terminalId);

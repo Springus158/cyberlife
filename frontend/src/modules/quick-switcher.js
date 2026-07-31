@@ -5,17 +5,10 @@
 
 import { state } from './state.js';
 import { searchNormalize } from './utils.js';
-import { getAllTerminalTabs } from './terminal-dashboard.js';
+import { getProjectSessionInfo } from './terminal-dashboard.js';
 
 // j/k/p stay out of the alphabet: j/k navigate the list, p opened the popup
 const LABEL_ALPHABET = 'asdfghlqwertuiozxcvbnm';
-
-function sessionCount(project) {
-  if (!project.path) return 0;
-  return getAllTerminalTabs().filter(t =>
-    t.path && (t.path === project.path || t.path.startsWith(project.path + '/'))
-  ).length;
-}
 
 function orderedProjects() {
   const order = window._projectDisplayOrder;
@@ -58,10 +51,12 @@ export function openProjectSwitcher() {
 
   switcher = {
     projects,
-    selected: Math.max(0, projects.findIndex(p => p.name === state.activeProject?.name)),
+    sessionInfo: getProjectSessionInfo(),
+    selected: 0,
     filter: '',
     buffer: '',
   };
+  switcher.selected = Math.max(0, filteredProjects().findIndex(p => p.name === state.activeProject?.name));
 
   const modal = document.createElement('div');
   modal.id = 'projectSwitcher';
@@ -121,13 +116,17 @@ function closeSwitcher() {
   switcher = null;
 }
 
-// Flat and alphabetical; the group shows as a tag on each tile
+// Projects with live sessions first, then the rest — each alphabetical;
+// the group shows as a tag on each tile
 function filteredProjects() {
   if (!switcher) return [];
   const q = searchNormalize(switcher.filter.trim());
-  return switcher.projects
-    .filter(p => !q || searchNormalize(p.name).includes(q))
-    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  const matching = switcher.projects.filter(p => !q || searchNormalize(p.name).includes(q));
+  return [
+    ...matching.filter(p => switcher.sessionInfo.has(p.name)).sort(byName),
+    ...matching.filter(p => !switcher.sessionInfo.has(p.name)).sort(byName),
+  ];
 }
 
 function groupTagOf(p) {
@@ -151,7 +150,7 @@ function moveSelection(delta) {
 function renderTile(p, i) {
   const label = switcher.labels[i];
   const match = !switcher.buffer || label.startsWith(switcher.buffer);
-  const count = sessionCount(p);
+  const s = switcher.sessionInfo.get(p.name);
   return `
     <div class="ps-tile ${i === switcher.selected ? 'kb-selected' : ''} ${p.name === state.activeProject?.name ? 'ps-current' : ''}"
          data-name="${p.name.replace(/"/g, '&quot;')}"
@@ -165,7 +164,7 @@ function renderTile(p, i) {
       <span class="ps-tile-icon">${p.icon || '📁'}</span>
       <span class="ps-name">${p.name}</span>
       ${groupTagOf(p)}
-      <span class="ps-count">${count > 0 ? `${count} ●` : '&nbsp;'}</span>
+      <span class="ps-count">${s ? `${s.count > 1 ? `${s.count} ` : ''}<span class="term-proj-dot claude-dot-${s.status}"></span>` : '&nbsp;'}</span>
     </div>
   `;
 }
@@ -177,8 +176,12 @@ function renderList() {
   if (switcher.selected >= items.length) switcher.selected = Math.max(0, items.length - 1);
   switcher.labels = makeLabels(items.length);
 
+  const activeCount = items.filter(p => switcher.sessionInfo.has(p.name)).length;
   listEl.innerHTML = items.length
-    ? items.map((p, i) => renderTile(p, i)).join('')
+    ? items.map((p, i) =>
+        renderTile(p, i) +
+        (i === activeCount - 1 && activeCount < items.length ? '<div class="ps-separator"></div>' : '')
+      ).join('')
     : '<div class="help-empty">No matching projects</div>';
 
   listEl.querySelectorAll('.ps-tile').forEach(item => {

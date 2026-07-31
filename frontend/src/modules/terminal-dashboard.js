@@ -14,6 +14,7 @@ import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmu
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { getMode, setMode } from './shell.js';
 import { toggleTermMenu } from './term-menu.js';
+import { getClaudeStatusTitle } from './claude-status.js';
 
 // Dashboard state
 let dashboardState = {
@@ -45,7 +46,8 @@ let dashboardState = {
   pastedImageBase64: null,     // base64 data URI for thumbnail preview
   queueMode: false,            // when true, prompts go to queue instead of terminal
   promptQueue: [],             // queued prompts [{id, text}]
-  pinnedPrompts: [],            // cached pinned prompts for quick-access buttons
+  pinnedPrompts: [],            // cached pinned prompts for the prompts popup
+  promptsPopupOpen: false,
   pinnedTerminals: {},           // projectName -> terminal tab name (per-project pins)
   nameOverrides: {},             // sessionId -> custom name (fallback B)
   terminalAccounts: {},          // sessionId -> CLAUDE_CONFIG_DIR (which Claude account the terminal uses)
@@ -159,6 +161,30 @@ function buildProjectGroups(allTabs) {
   }
 
   return groups;
+}
+
+// Worst-first: a session waiting for the user outranks one still working,
+// which outranks idle — the project dot shows what most needs attention
+function aggregateClaudeStatus(tabs) {
+  const statuses = tabs.map(t => state.claudeStatus?.get?.(t.sessionId)).filter(Boolean);
+  if (statuses.includes('needs_action')) return 'needs_action';
+  if (statuses.includes('working')) return 'working';
+  if (statuses.includes('idle')) return 'idle';
+  return 'none';
+}
+
+// projectName -> { count, status, firstSessionId } for projects with live sessions
+export function getProjectSessionInfo() {
+  const info = new Map();
+  for (const g of buildProjectGroups(getAllTerminalTabs())) {
+    if (g.name === 'Other' || g.tabs.length === 0) continue;
+    info.set(g.name, {
+      count: g.tabs.length,
+      status: aggregateClaudeStatus(g.tabs),
+      firstSessionId: g.tabs[0].sessionId,
+    });
+  }
+  return info;
 }
 
 // Get next tab number for a project
@@ -422,10 +448,27 @@ function renderWrappersToggleButton() {
   `;
 }
 
+function renderProjectBarButtons() {
+  const info = getProjectSessionInfo();
+  return (state.projects || [])
+    .filter(p => info.has(p.name) && p.name !== state.activeProject?.name)
+    .map(p => {
+      const s = info.get(p.name);
+      return `
+      <button class="key-btn term-proj-btn"
+              data-act="itermJumpProject" data-arg="${escapeAttr(p.name)}"
+              style="--project-color: ${p.color || '#3b82f6'}"
+              title="${escapeAttr(p.name)} — ${s.count} session${s.count > 1 ? 's' : ''} (${getClaudeStatusTitle(s.status) || 'no Claude'})">
+        <span class="term-proj-dot claude-dot-${s.status}"></span>${p.icon ? `${p.icon} ` : ''}${escapeHtml(p.name)}${s.count > 1 ? `<span class="term-proj-count">${s.count}</span>` : ''}
+      </button>`;
+    }).join('');
+}
+
 function renderInputPanel(opts = {}) {
   const disabled = opts.disabled || false;
   const placeholder = opts.placeholder || 'Type command and press Enter...';
   const sessionId = opts.sessionId || dashboardState.viewingSessionId;
+  const projectBar = renderProjectBarButtons();
   return `
               <div class="term-hint-bar" id="termHintBar">${termHintBarContent()}</div>
               <div class="keyboard-helper">
@@ -438,15 +481,21 @@ function renderInputPanel(opts = {}) {
                 <button class="key-btn" data-act="itermSendKey" data-arg="up">↑</button>
                 <button class="key-btn" data-act="itermSendKey" data-arg="down">↓</button>
                 ${dashboardState.pinnedPrompts.length > 0 ? `
-                  <span class="pinned-prompt-separator"></span>
-                  ${dashboardState.pinnedPrompts.map(p => `
-                    <button class="key-btn pinned-prompt-btn"
-                            data-act="itermSendPinnedPrompt" data-arg="${escapeAttr(p.id)}" data-global="${p.isGlobal ? '1' : ''}"
-                            title="${escapeHtml(p.content).replace(/"/g, '&quot;')}">
-                      ${escapeHtml(p.title)}
-                    </button>
-                  `).join('')}
+                  <span class="prompts-popup-wrapper">
+                    <button class="key-btn prompts-popup-btn ${dashboardState.promptsPopupOpen ? 'active' : ''}" data-act="itermTogglePromptsPopup" title="Saved prompts">💬</button>
+                    <div id="promptsPopup" class="prompts-popup" style="display:${dashboardState.promptsPopupOpen ? 'flex' : 'none'}">
+                      ${dashboardState.pinnedPrompts.map(p => `
+                        <button class="prompts-popup-item"
+                                data-act="itermSendPinnedPrompt" data-arg="${escapeAttr(p.id)}" data-global="${p.isGlobal ? '1' : ''}"
+                                title="${escapeAttr(p.content)}">
+                          ${escapeHtml(p.title)}
+                        </button>
+                      `).join('')}
+                    </div>
+                  </span>
                 ` : ''}
+                ${projectBar ? '<span class="pinned-prompt-separator"></span>' : ''}
+                <div class="term-project-bar" id="termProjectBar">${projectBar}</div>
                 <span class="bridge-indicator ${dashboardState.useStyledMode ? 'active' : ''}" title="${dashboardState.useStyledMode ? 'Styled stream active' : 'Not connected'}"></span>
                 <div class="voice-controls">
                   <button id="voiceMicBtn" class="voice-mic-btn voice-${dashboardState.voiceState}" data-act="itermToggleVoice" title="${dashboardState.voiceState === 'listening' ? 'Stop & send (⌘R)' : 'Start voice (⌘R)'}">
@@ -1298,7 +1347,62 @@ window.itermStopViewing = function() {
   renderTerminalDashboard();
 };
 
+window.itermTogglePromptsPopup = function() {
+  setPromptsPopupOpen(!dashboardState.promptsPopupOpen);
+};
+
+function setPromptsPopupOpen(open) {
+  dashboardState.promptsPopupOpen = open;
+  const popup = document.getElementById('promptsPopup');
+  if (popup) popup.style.display = open ? 'flex' : 'none';
+  document.querySelector('.prompts-popup-btn')?.classList.toggle('active', open);
+}
+
+document.addEventListener('click', (e) => {
+  if (dashboardState.promptsPopupOpen && !e.target.closest('.prompts-popup-wrapper')) {
+    setPromptsPopupOpen(false);
+  }
+});
+
+// The clicked button glides into the current-project label on the left,
+// selling the "this becomes the active project" hand-off before the bar
+// re-renders without it
+function animateProjectJump(btn) {
+  const label = document.querySelector('.keyboard-helper .current-project-label');
+  if (!label) return Promise.resolve();
+  const from = btn.getBoundingClientRect();
+  const to = label.getBoundingClientRect();
+  btn.classList.add('jumping');
+  void btn.offsetWidth; // flush styles so the transition picks up the transform
+  btn.style.transform = `translate(${to.left - from.left}px, ${to.top - from.top}px) scale(0.85)`;
+  return new Promise(resolve => setTimeout(resolve, 280));
+}
+
+// Switch to a project from the input-bar button: full project switch, then
+// always land on its first session (no picker in between)
+window.itermJumpProject = async function(projectName, e) {
+  const group = buildProjectGroups(getAllTerminalTabs()).find(g => g.name === projectName);
+  const firstSessionId = group?.tabs?.[0]?.sessionId || null;
+  const project = (state.projects || []).find(p => p.name === projectName);
+  if (project && state.activeProject?.id !== project.id) {
+    const btn = e?.target?.closest?.('.term-proj-btn');
+    if (btn) await animateProjectJump(btn);
+    await switchProject(project.id);
+  }
+  dashboardState.selectedProjectName = projectName;
+  if (firstSessionId) window.itermSelectTerminal(firstSessionId);
+  else renderTerminalDashboard();
+};
+
+// Targeted repaint for claude-status.js: status dots change often and a full
+// dashboard re-render would tear down the popup and input focus
+window.itermRefreshProjectBar = function() {
+  const bar = document.getElementById('termProjectBar');
+  if (bar) bar.innerHTML = renderProjectBarButtons();
+};
+
 window.itermSendPinnedPrompt = async function(promptId, isGlobal) {
+  setPromptsPopupOpen(false);
   const targetSession = dashboardState.viewingSessionId;
   if (!targetSession) return;
   const prompt = dashboardState.pinnedPrompts.find(p => p.id === promptId);
@@ -1674,6 +1778,8 @@ const DASHBOARD_ACTIONS = {
   itermSelectProject: (n) => window.itermSelectProject(n),
   itermSendKey: (k) => window.itermSendKey(k),
   itermSendPinnedPrompt: (id, isGlobal) => window.itermSendPinnedPrompt(id, isGlobal),
+  itermTogglePromptsPopup: () => window.itermTogglePromptsPopup(),
+  itermJumpProject: (n, e) => window.itermJumpProject(n, e),
   itermSendQueued: (id) => window.itermSendQueued(id),
   itermRemoveQueued: (id) => window.itermRemoveQueued(id),
   itermToggleQueueMode: () => window.itermToggleQueueMode(),

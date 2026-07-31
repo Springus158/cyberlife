@@ -1884,6 +1884,33 @@ body.wails-fullscreen .titlebar-drag-region {
   color: var(--warning);
 }
 
+/* Aggregate per-project Claude status dot (input bar + project switcher) */
+.term-proj-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #475569;
+  flex-shrink: 0;
+}
+
+.claude-dot-idle { background: var(--success, #22c55e); }
+
+.claude-dot-working {
+  background: var(--accent, #3b82f6);
+  animation: claude-dot-pulse 1.2s ease-in-out infinite;
+}
+
+.claude-dot-needs_action {
+  background: var(--warning, #f59e0b);
+  animation: claude-dot-pulse 0.7s ease-in-out infinite;
+}
+
+@keyframes claude-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /* ============================================
    Browser Panel Enhancements
    ============================================ */
@@ -4828,9 +4855,19 @@ body.wails-fullscreen .titlebar-drag-region {
 }
 
 .ps-tile .ps-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   color: #3fb950;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ps-separator {
+  height: 1px;
+  background: var(--border, #334155);
+  margin: 2px 4px;
   flex-shrink: 0;
 }
 
@@ -7058,22 +7095,93 @@ body.wails-fullscreen .titlebar-drag-region {
       flex-shrink: 0;
     }
 
-    .pinned-prompt-btn {
-      background: rgba(137, 180, 250, 0.08) !important;
-      border-color: rgba(137, 180, 250, 0.2) !important;
-      color: #89b4fa !important;
+    .prompts-popup-wrapper {
+      position: relative;
+      display: inline-flex;
     }
 
-    .pinned-prompt-btn:hover {
-      background: rgba(137, 180, 250, 0.15) !important;
-      color: #b4d0fb !important;
-      border-color: rgba(137, 180, 250, 0.35) !important;
+    .prompts-popup-btn.active {
+      background: #334155;
+      color: #e2e8f0;
+      border-color: #475569;
     }
 
-    .pinned-prompt-btn:active {
-      background: #3b82f6 !important;
-      color: white !important;
-      border-color: #3b82f6 !important;
+    .prompts-popup {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 6px;
+      min-width: 200px;
+      max-width: 320px;
+      max-height: 260px;
+      overflow-y: auto;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    .prompts-popup-item {
+      background: none;
+      border: none;
+      text-align: left;
+      color: #89b4fa;
+      font-size: 12px;
+      font-family: inherit;
+      padding: 5px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .prompts-popup-item:hover {
+      background: rgba(137, 180, 250, 0.12);
+      color: #b4d0fb;
+    }
+
+    .term-project-bar {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .term-proj-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 9px;
+      color: var(--project-color, #94a3b8);
+      background: color-mix(in srgb, var(--project-color, #3b82f6) 8%, transparent);
+      border-color: color-mix(in srgb, var(--project-color, #3b82f6) 30%, transparent);
+    }
+
+    .term-proj-btn:hover {
+      background: color-mix(in srgb, var(--project-color, #3b82f6) 20%, transparent);
+      border-color: var(--project-color, #3b82f6);
+      color: var(--project-color, #e2e8f0);
+    }
+
+    .term-proj-btn.jumping {
+      transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.28s ease;
+      opacity: 0;
+      pointer-events: none;
+      position: relative;
+      z-index: 10;
+    }
+
+    .term-proj-count {
+      font-size: 10px;
+      padding: 0 4px;
+      border-radius: 3px;
+      background: color-mix(in srgb, var(--project-color, #3b82f6) 25%, transparent);
     }
 
     /* ALL view toggle button */
