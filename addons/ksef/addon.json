@@ -1,0 +1,121 @@
+{
+  "id": "ksef",
+  "name": "KSeF",
+  "icon": "🧾",
+  "version": "0.1.0",
+  "description": "Polish market 🇵🇱: e-invoicing via the national KSeF 2.0 API — browse incoming cost invoices and your sales, issue FA(3) invoices without leaving the app, track payments. Includes a one-time history import from Fakturownia.pl (numbers, payment statuses, KSeF ids).",
+  "author": "Cyber Life community",
+  "category": "integrations",
+  "tags": ["poland", "ksef", "invoices", "e-invoicing", "fakturownia", "faktury"],
+  "entry": "main.js",
+  "permissions": [],
+  "hosts": [
+    "api.ksef.mf.gov.pl",
+    "api-test.ksef.mf.gov.pl",
+    "api-demo.ksef.mf.gov.pl",
+    "*.fakturownia.pl"
+  ],
+  "widgets": [
+    { "id": "ksef.today", "title": "KSeF Today", "icon": "📥", "description": "Invoices that arrived in KSeF today", "dashboard": true },
+    { "id": "ksef.unpaid", "title": "Unpaid Invoices", "icon": "💸", "description": "Sales invoices awaiting payment", "dashboard": true }
+  ],
+  "modules": [
+    { "id": "ksef.invoices", "label": "Invoices", "icon": "🧾" }
+  ],
+  "agentTools": [
+    {
+      "name": "list_companies",
+      "description": "List configured companies (id, name, NIP, KSeF environment, last sync time)",
+      "schema": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "list_invoices",
+      "description": "List invoices across KSeF and imported Fakturownia history. Filter by company, direction (sale/cost), unpaid, date range or free-text query.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "company": { "type": "string", "description": "Company name, id or NIP; optional when only one is configured" },
+          "direction": { "type": "string", "enum": ["sale", "cost"] },
+          "unpaid": { "type": "boolean", "description": "Only unpaid (excludes proformas)" },
+          "from": { "type": "string", "description": "Issue date lower bound YYYY-MM-DD" },
+          "to": { "type": "string", "description": "Issue date upper bound YYYY-MM-DD" },
+          "query": { "type": "string", "description": "Substring match on number, KSeF number or contractor" },
+          "limit": { "type": "integer", "default": 50 }
+        }
+      }
+    },
+    {
+      "name": "create_invoice",
+      "description": "Create a sales invoice (VAT or proforma) with Fakturownia-style numbering; optionally send it straight to KSeF (send: true).",
+      "schema": {
+        "type": "object",
+        "required": ["buyerName", "lines"],
+        "properties": {
+          "company": { "type": "string", "description": "Company name, id or NIP; optional when only one is configured" },
+          "kind": { "type": "string", "enum": ["vat", "proforma"], "default": "vat" },
+          "buyerName": { "type": "string" },
+          "buyerNip": { "type": "string" },
+          "buyerAddress1": { "type": "string" },
+          "buyerAddress2": { "type": "string" },
+          "issueDate": { "type": "string", "description": "YYYY-MM-DD, default today" },
+          "paymentTo": { "type": "string", "description": "Payment due date YYYY-MM-DD" },
+          "currency": { "type": "string", "default": "PLN" },
+          "number": { "type": "string", "description": "Override the auto-generated number" },
+          "send": { "type": "boolean", "description": "Send to KSeF immediately after creating" },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "unitNetPrice"],
+              "properties": {
+                "name": { "type": "string" },
+                "quantity": { "type": "number", "default": 1 },
+                "unit": { "type": "string", "default": "szt" },
+                "unitNetPrice": { "type": "number", "description": "Net unit price" },
+                "vatRate": { "type": "number", "enum": [23, 8, 5, 0], "default": 23 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "send_invoice",
+      "description": "Send a locally created draft invoice to KSeF (returns the assigned KSeF number)",
+      "schema": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "description": "Invoice id from list_invoices" } }
+      }
+    },
+    {
+      "name": "mark_paid",
+      "description": "Mark an invoice as paid (or unpaid with paid: false)",
+      "schema": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "paid": { "type": "boolean", "default": true },
+          "paidDate": { "type": "string", "description": "YYYY-MM-DD, default today" }
+        }
+      }
+    },
+    {
+      "name": "sync",
+      "description": "Fetch new invoices from KSeF (sales and incoming costs) for one or all companies",
+      "schema": {
+        "type": "object",
+        "properties": { "company": { "type": "string", "description": "Company name, id or NIP; omit for all" } }
+      }
+    },
+    {
+      "name": "import_fakturownia",
+      "description": "Run the full Fakturownia.pl history import for a company (idempotent, re-runnable)",
+      "schema": {
+        "type": "object",
+        "properties": { "company": { "type": "string", "description": "Company name, id or NIP; optional when only one is configured" } }
+      }
+    }
+  ]
+}

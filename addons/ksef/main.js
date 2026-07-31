@@ -1,0 +1,119 @@
+// KSeF addon entry. Polish-market e-invoicing: browses and issues invoices
+// through the national KSeF 2.0 API, with a one-time history import from
+// Fakturownia.pl. Agent tools mirror what the UI can do.
+
+import { createStore } from './store.js';
+import {
+  renderPage, pageOnKey, renderTodayWidget, renderUnpaidWidget, renderSettings,
+} from './page.js';
+import { syncCompany, createInvoice, sendToKsef } from './service.js';
+import { importFromFakturownia } from './fakturownia.js';
+
+export default async function activate(cl) {
+  const store = createStore(cl);
+  await store.init();
+  const deps = { cl, http: cl.http.bind(cl), store };
+
+  let pageEl = null;
+  cl.registerModule({
+    id: 'invoices',
+    label: 'Invoices',
+    icon: '🧾',
+    render(el) {
+      pageEl = el;
+      renderPage(el, deps);
+    },
+    onKey(e) {
+      return pageEl ? pageOnKey(e, pageEl, deps) : false;
+    },
+  });
+
+  cl.registerWidget({ id: 'today', title: 'KSeF Today', icon: '📥', dashboard: true, render: (el) => renderTodayWidget(el, deps) });
+  cl.registerWidget({ id: 'unpaid', title: 'Unpaid Invoices', icon: '💸', dashboard: true, render: (el) => renderUnpaidWidget(el, deps) });
+  cl.registerSettingsSection({ id: 'settings', label: 'KSeF', icon: '🧾', render: (el) => renderSettings(el, deps) });
+
+  // ---- agent tools (MCP: ksef_*) ----
+
+  function resolveCompany(ref) {
+    const companies = store.companies();
+    if (!ref) {
+      if (companies.length === 1) return companies[0];
+      throw new Error(`company is required; configured: ${companies.map((c) => c.name).join(', ') || 'none'}`);
+    }
+    const found = companies.find((c) => c.id === ref || c.name.toLowerCase() === String(ref).toLowerCase() || c.nip === ref);
+    if (!found) throw new Error(`company "${ref}" not found; configured: ${companies.map((c) => c.name).join(', ') || 'none'}`);
+    return found;
+  }
+
+  cl.registerAgentTool('list_companies', async () => ({
+    companies: store.companies().map((c) => ({
+      id: c.id, name: c.name, nip: c.nip, env: c.env || 'prod', lastSync: store.syncState(c.id).lastSync || null,
+    })),
+  }));
+
+  cl.registerAgentTool('list_invoices', async (args) => {
+    const companyId = args.company ? resolveCompany(args.company).id : undefined;
+    const invoices = store.listInvoices({
+      companyId,
+      dir: args.direction,
+      unpaid: args.unpaid,
+      from: args.from,
+      to: args.to,
+      query: args.query,
+      limit: args.limit || 50,
+    });
+    return { count: invoices.length, invoices: invoices.map(({ lines, ...rest }) => rest) };
+  });
+
+  cl.registerAgentTool('create_invoice', async (args) => {
+    const company = resolveCompany(args.company);
+    const record = await createInvoice(deps, company, args);
+    let sent = null;
+    if (args.send && record.kind !== 'proforma') {
+      sent = await sendToKsef(deps, company, record.id);
+    }
+    if (pageEl) renderPage(pageEl, deps);
+    return { invoice: sent || record };
+  });
+
+  cl.registerAgentTool('send_invoice', async (args) => {
+    const inv = store.getInvoice(args.id);
+    if (!inv) throw new Error(`invoice ${args.id} not found`);
+    const updated = await sendToKsef(deps, store.company(inv.companyId), args.id);
+    if (pageEl) renderPage(pageEl, deps);
+    return { invoice: updated };
+  });
+
+  cl.registerAgentTool('mark_paid', async (args) => {
+    const updated = await store.updateInvoice(args.id, {
+      paid: args.paid !== false,
+      paidDate: args.paid !== false ? (args.paidDate || new Date().toISOString().slice(0, 10)) : '',
+    });
+    if (pageEl) renderPage(pageEl, deps);
+    return { invoice: updated };
+  });
+
+  cl.registerAgentTool('sync', async (args) => {
+    const targets = args.company ? [resolveCompany(args.company)] : store.companies();
+    const results = {};
+    for (const company of targets) {
+      try {
+        results[company.name] = await syncCompany(deps, company);
+      } catch (err) {
+        cl.log('agent sync failed:', err);
+        results[company.name] = { error: String(err.message || err) };
+      }
+    }
+    if (pageEl) renderPage(pageEl, deps);
+    return results;
+  });
+
+  cl.registerAgentTool('import_fakturownia', async (args) => {
+    const company = resolveCompany(args.company);
+    const result = await importFromFakturownia(deps, company);
+    if (pageEl) renderPage(pageEl, deps);
+    return result;
+  });
+
+  cl.log('KSeF addon active');
+}
