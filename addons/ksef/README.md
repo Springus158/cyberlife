@@ -55,10 +55,20 @@ Settings → Agent Skills if that is not acceptable.
 - Correction invoices (korekty) are not issued from the addon yet — issue
   them in KSeF/Fakturownia and they'll appear via sync.
 - Only the 23/8/5/0% VAT rates are supported; `zw`/`np` and other rates are
-  rejected rather than silently mis-declared.
+  rejected rather than silently mis-declared. The 0% rate is declared as
+  **domestic** (`P_13_6_1`) — WDT and export need `P_13_6_2`/`_3` and are
+  not supported.
+- Sending requires the company address (FA(3) makes `Podmiot1/Adres`
+  mandatory) — fill it in Settings before the first send.
 - Sync reaches back at most 80 days (KSeF caps a query at 3 months) — older
   history comes from the Fakturownia import.
+- KSeF rate-limits reads hard (metadata queries: 20/h, XML downloads: 64/h)
+  and calls out sub-15-minute polling as misuse — sync on demand, not on a
+  timer.
 - Attachments and UPO downloads are not implemented.
 - Cost invoices are metadata-only: their XML is not downloaded, so they have
   no line items in the detail view.
+- The Fakturownia list API is not documented to include `gov_id` on list
+  rows; if it is absent, imported invoices dedup against KSeF sync by
+  number + seller NIP instead of the KSeF number.
 - Amount filters and bank-statement payment matching are future work.

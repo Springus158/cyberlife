@@ -1,7 +1,8 @@
 // KSeF 2.0 REST client. All HTTP goes through the app's addon proxy
 // (cl.http) because the KSeF API sends no CORS headers. Crypto is WebCrypto:
 // RSA-OAEP(SHA-256) for the auth token and the AES session key, AES-256-CBC
-// with PKCS#7 for invoice payloads, per CIRFMF/ksef-docs.
+// with PKCS#7 for invoice payloads, per CIRFMF/ksef-api (the IV travels in
+// the session's encryption block, never prepended to the ciphertext).
 
 export const KSEF_BASE_URLS = {
   test: 'https://api-test.ksef.mf.gov.pl/v2',
@@ -95,7 +96,7 @@ export class KsefClient {
     this.base = KSEF_BASE_URLS[env] || KSEF_BASE_URLS.prod;
   }
 
-  async req(path, { method = 'GET', bearer, body, raw } = {}) {
+  async req(path, { method = 'GET', bearer, body, raw } = {}, attempt = 0) {
     const headers = {};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (bearer) headers['Authorization'] = `Bearer ${bearer}`;
@@ -107,6 +108,16 @@ export class KsefClient {
     });
     if (res.bodyBase64) {
       throw new Error(`KSeF ${path} → ${res.status} returned a non-text body (${(res.body || '').length} b64 chars)`);
+    }
+    // KSeF limits are tight (metadata queries: 20/h) and repeat violations
+    // escalate the block, so a 429 waits the advertised time — once
+    if (res.status === 429 && attempt === 0) {
+      const retryAfter = Number(res.headers?.['Retry-After']?.[0]);
+      await sleep(Math.min(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 5, 30) * 1000);
+      return this.req(path, { method, bearer, body, raw }, 1);
+    }
+    if (res.status === 429) {
+      throw new Error(`KSeF ${path} → 429 rate limited — wait before syncing again (Retry-After: ${res.headers?.['Retry-After']?.[0] || '?'}s)`);
     }
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`KSeF ${path} → ${res.status} ${String(res.body || '').slice(0, 300)}`);
@@ -239,7 +250,13 @@ export class KsefClient {
       const st = await this.invoiceStatus(params);
       if (st.ksefNumber) return st.ksefNumber;
       if (st.status?.code >= 400) {
-        throw new Error(`KSeF rejected the invoice: ${st.status.description || st.status.code}`);
+        // 440 = duplicate: this exact document is already filed, and the
+        // status carries its number — that is a success for our record
+        const original = st.status?.extensions?.originalKsefNumber || st.extensions?.originalKsefNumber;
+        if (st.status.code === 440 && original) return original;
+        const err = new Error(`KSeF rejected the invoice: ${st.status.description || st.status.code}`);
+        err.ksefRejected = true;
+        throw err;
       }
       await sleep(1500);
     }

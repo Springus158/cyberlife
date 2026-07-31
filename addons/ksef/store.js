@@ -9,6 +9,7 @@
 // lines?, sendState?}
 
 const MAX_CHUNK_BYTES = 52 * 1024; // below the host's 64KB value cap
+const utf8 = new TextEncoder();
 const MAX_CONTRACTORS = 500;
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -129,7 +130,9 @@ export function createStore(cl) {
     let current = [];
     for (const rec of list) {
       current.push(rec);
-      if (JSON.stringify(current).length > MAX_CHUNK_BYTES && current.length > 1) {
+      // Measured in UTF-8 bytes, not string length — the host cap is bytes,
+      // and Polish diacritics take two of them per character
+      if (utf8.encode(JSON.stringify(current)).length > MAX_CHUNK_BYTES && current.length > 1) {
         current.pop();
         parts.push(current);
         current = [rec];

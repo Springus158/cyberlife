@@ -16,6 +16,17 @@ function money(n) {
   return (Math.round(Number(n) * 100) / 100).toFixed(2);
 }
 
+// P_8B is TIlosci (6 decimals) and P_9A is TKwotowy2 (8): forcing 2 would
+// corrupt 0.125 szt and break KSeF's P_8B × P_9A = P_11 cross-check.
+// Number() strips trailing zeros so "5" stays "5", never "5.000000".
+function quantity(n) {
+  return String(Number(Number(n).toFixed(6)));
+}
+
+function unitPrice(n) {
+  return String(Number(Number(n).toFixed(8)));
+}
+
 export function lineNet(line) {
   return Math.round(line.quantity * line.unitNetPrice * 100) / 100;
 }
@@ -24,8 +35,10 @@ export function lineVat(line) {
   return Math.round(lineNet(line) * (line.vatRate / 100) * 100) / 100;
 }
 
-// FA(3) VAT bucket index for the standard rates (P_13_x net / P_14_x VAT)
-const RATE_BUCKET = { 23: 1, 8: 2, 5: 3, 0: 6 };
+// FA(3) VAT bucket suffix for the standard rates (P_13_x net / P_14_x VAT).
+// 0% maps to P_13_6_1 (domestic only — there is no plain P_13_6 in FA(3),
+// and WDT/export would need P_13_6_2/_3, which this builder does not issue)
+const RATE_BUCKET = { 23: '1', 8: '2', 5: '3', 0: '6_1' };
 
 export const SUPPORTED_VAT_RATES = Object.keys(RATE_BUCKET).map(Number);
 
@@ -49,8 +62,13 @@ export function computeTotals(lines) {
   return { buckets, gross: Math.round(gross * 100) / 100 };
 }
 
-function partyXml(tag, p) {
-  const addr = p.address
+function partyXml(tag, p, { requireAddress = false } = {}) {
+  // Podmiot1/Adres is minOccurs=1 in the FA(3) XSD — an invoice without the
+  // seller address is rejected outright, so fail with an actionable message
+  if (requireAddress && !p.address?.line1) {
+    throw new Error(`${tag}: FA(3) requires the seller address — fill "Address line 1" in company settings`);
+  }
+  const addr = p.address?.line1
     ? `<Adres><KodKraju>${esc(p.address.country || 'PL')}</KodKraju><AdresL1>${esc(p.address.line1)}</AdresL1>${
         p.address.line2 ? `<AdresL2>${esc(p.address.line2)}</AdresL2>` : ''
       }</Adres>`
@@ -80,7 +98,7 @@ function paymentXml(invoice) {
 // seller{nip,name,address?}, buyer{...}, lines[{name,unit,quantity,unitNetPrice,vatRate}]}
 export function buildFa3Xml(invoice) {
   const totals = computeTotals(invoice.lines);
-  const createdAt = invoice.createdAt || `${invoice.issueDate}T00:00:00Z`;
+  const createdAt = invoice.createdAt || new Date().toISOString();
 
   const vatBuckets = [];
   for (const [rate, sum] of [...totals.buckets.entries()].sort((a, b) => b[0] - a[0])) {
@@ -96,8 +114,8 @@ export function buildFa3Xml(invoice) {
       + `<NrWierszaFa>${i + 1}</NrWierszaFa>`
       + `<P_7>${esc(line.name)}</P_7>`
       + `<P_8A>${esc(line.unit || 'szt')}</P_8A>`
-      + `<P_8B>${money(line.quantity)}</P_8B>`
-      + `<P_9A>${money(line.unitNetPrice)}</P_9A>`
+      + `<P_8B>${quantity(line.quantity)}</P_8B>`
+      + `<P_9A>${unitPrice(line.unitNetPrice)}</P_9A>`
       + `<P_11>${money(lineNet(line))}</P_11>`
       + `<P_12>${line.vatRate === 0 ? '0' : String(line.vatRate)}</P_12>`
       + `</FaWiersz>`)
@@ -121,7 +139,7 @@ export function buildFa3Xml(invoice) {
     + `<DataWytworzeniaFa>${esc(createdAt)}</DataWytworzeniaFa>`
     + `<SystemInfo>CyberLife</SystemInfo>`
     + `</Naglowek>`
-    + partyXml('Podmiot1', invoice.seller)
+    + partyXml('Podmiot1', invoice.seller, { requireAddress: true })
     + partyXml('Podmiot2', invoice.buyer)
     + `<Fa>`
     + `<KodWaluty>${esc(invoice.currency || 'PLN')}</KodWaluty>`
@@ -131,8 +149,10 @@ export function buildFa3Xml(invoice) {
     + `<P_15>${money(totals.gross)}</P_15>`
     + adnotacje
     + `<RodzajFaktury>VAT</RodzajFaktury>`
-    + paymentXml(invoice)
+    // <Fa> is a strict xsd:sequence and Platnosc sits AFTER the FaWiersz
+    // rows — the reverse order fails validation with invoice status 450
     + rows
+    + paymentXml(invoice)
     + `</Fa>`
     + `</Faktura>`
   );

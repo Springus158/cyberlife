@@ -93,6 +93,12 @@ async function queryAll(client, accessToken, subjectType, from, log) {
     const page = res.invoices || [];
     out.push(...page);
     hwm = res.permanentStorageHwmDate || hwm;
+    // isTruncated marks the server's 10k-record ceiling for this dateRange;
+    // more pageOffset pages would silently repeat, not continue
+    if (res.isTruncated) {
+      log?.(`KSeF ${subjectType}: query hit the server's 10k-record ceiling — some invoices were not fetched`);
+      return { invoices: out, hwm: null, truncated: true };
+    }
     if (!res.hasMore || page.length === 0) break;
   }
   if (pageOffset >= MAX_PAGES) {
@@ -126,10 +132,13 @@ export async function syncCompany(deps, company) {
     ];
     const result = await store.upsertInvoices(company.id, records);
     await refreshPendingSends(deps, company, client, accessToken);
+    // The cursor is shared by both directions, so a truncated page walk on
+    // either side must not advance it past invoices it never saw — the other
+    // side's hwm would skip them for good
+    const truncated = sales.truncated || costs.truncated;
+    const hwms = [sales.hwm, costs.hwm].filter(Boolean).sort();
     await store.setSyncState(company.id, {
-      // A truncated page walk must not advance the cursor past invoices it
-      // never saw, or they are lost for good
-      cursor: sales.hwm || costs.hwm || (sales.truncated || costs.truncated ? cursor : new Date().toISOString()),
+      cursor: truncated ? cursor : (hwms[0] || new Date().toISOString()),
       lastSync: new Date().toISOString(),
       lastError: '',
     });
@@ -143,7 +152,7 @@ export async function syncCompany(deps, company) {
 
 // An invoice whose KSeF number did not arrive before the send call gave up
 // is still in flight; without this it would sit as "processing" forever
-async function refreshPendingSends({ store }, company, client, accessToken) {
+async function refreshPendingSends({ store, cl }, company, client, accessToken) {
   const pending = store.listInvoices({ companyId: company.id, dir: 'sale' })
     .filter((i) => i.sendState === 'processing' && i.sessionRef && i.invoiceRef);
   for (const inv of pending) {
@@ -155,7 +164,14 @@ async function refreshPendingSends({ store }, company, client, accessToken) {
       }, 1);
       if (ksefNumber) await store.updateInvoice(inv.id, { ksefNumber, sendState: 'sent' });
     } catch (err) {
-      await store.updateInvoice(inv.id, { sendState: 'error', sendError: String(err?.message || err) });
+      // Only a real rejection ends the wait; a transient error (network,
+      // expired token) must keep the invoice in 'processing' so the next
+      // sync retries the status check
+      if (err?.ksefRejected) {
+        await store.updateInvoice(inv.id, { sendState: 'error', sendError: String(err?.message || err) });
+      } else {
+        cl?.log?.(`status check for ${inv.number} failed, will retry next sync:`, err);
+      }
     }
   }
 }

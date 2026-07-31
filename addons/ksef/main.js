@@ -71,11 +71,23 @@ export default async function activate(cl) {
     const company = resolveCompany(args.company);
     const record = await createInvoice(deps, company, args);
     let sent = null;
+    let sendError = '';
     if (args.send && record.kind !== 'proforma') {
-      sent = await sendToKsef(deps, company, record.id);
+      // A throw here would hide the created invoice from the agent, and its
+      // natural retry would file a duplicate under the next number — so the
+      // record is always returned, with the send failure alongside
+      try {
+        sent = await sendToKsef(deps, company, record.id);
+      } catch (err) {
+        cl.log('create_invoice: send failed:', err);
+        sendError = String(err?.message || err);
+      }
     }
     if (pageEl) renderPage(pageEl, deps);
-    return { invoice: sent || record };
+    const invoice = sent || store.getInvoice(record.id) || record;
+    return sendError
+      ? { invoice, sendError: `created but not confirmed in KSeF: ${sendError}` }
+      : { invoice };
   });
 
   cl.registerAgentTool('send_invoice', async (args) => {
