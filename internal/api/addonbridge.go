@@ -5,8 +5,12 @@
 package api
 
 import (
+	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -24,8 +28,63 @@ import (
 
 const (
 	maxProxyResponse = 20 << 20
-	proxyTimeout     = 90 * time.Second
+	proxyTimeout     = 45 * time.Second
 )
+
+// allowedProxyTarget gates every hop, not just the first: a redirect to a
+// host outside the manifest allowlist (or to plain http) is where an
+// allowlisted third party would otherwise smuggle the app into the local
+// network. Name-based checks alone cannot do that — see proxyClient.
+func allowedProxyTarget(a addons.Addon, u *url.URL) error {
+	if u.Scheme != "https" {
+		return fmt.Errorf("only https is allowed, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("url has no host")
+	}
+	if net.ParseIP(host) != nil || strings.EqualFold(host, "localhost") {
+		return errors.New("IP and localhost targets are not allowed")
+	}
+	if !a.HostAllowed(host) {
+		return fmt.Errorf("host %q is not in the addon's hosts allowlist", host)
+	}
+	return nil
+}
+
+// proxyClient resolves before it connects and refuses any name that lands on
+// a private address, so an allowlisted hostname pointing at 127.0.0.1 (or a
+// DNS rebind mid-request) cannot reach the app's own API or the LAN
+func proxyClient(a addons.Addon) *http.Client {
+	dialer := &net.Dialer{Timeout: 8 * time.Second}
+	return &http.Client{
+		Timeout: proxyTimeout,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, _, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+				if err != nil {
+					return nil, err
+				}
+				for _, ip := range ips {
+					if !publicIP(ip.IP) {
+						return nil, fmt.Errorf("%w: %s", errPrivateAddress, ip.IP)
+					}
+				}
+				return dialer.DialContext(ctx, network, addr)
+			},
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return errors.New("too many redirects")
+			}
+			return allowedProxyTarget(a, req.URL)
+		},
+	}
+}
 
 type addonHTTPRequest struct {
 	Addon   string            `json:"addon"`
@@ -50,20 +109,21 @@ func (s *Server) handleAddonHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := url.Parse(req.URL)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("url must be absolute https"))
 		return
 	}
-	// The manifest names public API hosts; loopback and raw IPs stay out so
-	// an addon cannot reach the local network with the app's privileges
-	host := u.Hostname()
-	if net.ParseIP(host) != nil || strings.EqualFold(host, "localhost") {
-		writeErr(w, http.StatusForbidden, fmt.Errorf("IP and localhost targets are not allowed"))
+	if err := allowedProxyTarget(addon, u); err != nil {
+		writeErr(w, http.StatusForbidden, err)
 		return
 	}
-	if !addon.HostAllowed(host) {
-		writeErr(w, http.StatusForbidden, fmt.Errorf("host %q is not in the addon's hosts allowlist", host))
-		return
+
+	// The handler's own write deadline is shorter than an upstream call may
+	// take, and a response written after it is lost
+	if rc := http.NewResponseController(w); rc != nil {
+		if err := rc.SetWriteDeadline(time.Now().Add(proxyTimeout + 15*time.Second)); err != nil {
+			logging.Debug("addon proxy: write deadline not settable", "error", err)
+		}
 	}
 
 	method := strings.ToUpper(req.Method)
@@ -82,24 +142,25 @@ func (s *Server) handleAddonHTTP(w http.ResponseWriter, r *http.Request) {
 	for k, v := range req.Headers {
 		out.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: proxyTimeout}
-	resp, err := client.Do(out)
+	resp, err := proxyClient(addon).Do(out)
 	if err != nil {
-		logging.Warn("addon http proxy request failed", "addon", req.Addon, "host", host, "error", err)
+		logging.Warn("addon http proxy request failed", "addon", req.Addon, "host", u.Hostname(), "error", err)
 		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxProxyResponse))
+	// One byte over the cap distinguishes "exactly at the limit" from
+	// "truncated", so a cut-off body is never returned as if it were whole
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxProxyResponse+1))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
-	headers := make(map[string]string, len(resp.Header))
-	for k := range resp.Header {
-		headers[k] = resp.Header.Get(k)
+	if len(data) > maxProxyResponse {
+		writeErr(w, http.StatusBadGateway, fmt.Errorf("response exceeds %d bytes", maxProxyResponse))
+		return
 	}
-	result := map[string]any{"status": resp.StatusCode, "headers": headers}
+	result := map[string]any{"status": resp.StatusCode, "headers": map[string][]string(resp.Header)}
 	if utf8.Valid(data) {
 		result["body"] = string(data)
 	} else {
@@ -111,17 +172,28 @@ func (s *Server) handleAddonHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ---- agent tool bridge ----
 
-const addonToolTimeout = 120 * time.Second
+const (
+	addonToolTimeout = 45 * time.Second
+	maxAddonCalls    = 64
+)
 
 type addonToolResult struct {
 	result json.RawMessage
 	err    string
 }
 
+// pendingAddonCall records which addon a bridged call belongs to, so another
+// addon in the same webview cannot answer on its behalf
+type pendingAddonCall struct {
+	addon string
+	ch    chan addonToolResult
+}
+
 func (s *Server) addonToolGroups() []toolGroup {
 	var out []toolGroup
+	static := s.staticGroupIDs()
 	for _, a := range addons.LoadAll(s.manager.GetAddonsEnabled()) {
-		if len(a.AgentTools) == 0 || a.Error != "" || staticGroupIDs[a.ID] {
+		if len(a.AgentTools) == 0 || a.Error != "" || static[a.ID] {
 			continue
 		}
 		addon := a
@@ -171,14 +243,22 @@ func (s *Server) callAddonAgentTool(a addons.Addon, fullName string, args json.R
 		return nil, fmt.Errorf("unknown tool %q", fullName)
 	}
 
-	s.addonCallsMu.Lock()
-	s.addonCallSeq++
-	callID := fmt.Sprintf("%s-%d", a.ID, s.addonCallSeq)
-	ch := make(chan addonToolResult, 1)
-	if s.addonCalls == nil {
-		s.addonCalls = make(map[string]chan addonToolResult)
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, fmt.Errorf("call id generation failed: %w", err)
 	}
-	s.addonCalls[callID] = ch
+	callID := hex.EncodeToString(nonce[:])
+	ch := make(chan addonToolResult, 1)
+
+	s.addonCallsMu.Lock()
+	if len(s.addonCalls) >= maxAddonCalls {
+		s.addonCallsMu.Unlock()
+		return nil, fmt.Errorf("too many addon tool calls in flight (%d)", maxAddonCalls)
+	}
+	if s.addonCalls == nil {
+		s.addonCalls = make(map[string]pendingAddonCall)
+	}
+	s.addonCalls[callID] = pendingAddonCall{addon: a.ID, ch: ch}
 	s.addonCallsMu.Unlock()
 	defer func() {
 		s.addonCallsMu.Lock()
@@ -215,6 +295,7 @@ func (s *Server) callAddonAgentTool(a addons.Addon, fullName string, args json.R
 
 type addonToolResultRequest struct {
 	CallID string          `json:"callId"`
+	Addon  string          `json:"addon"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  string          `json:"error,omitempty"`
 }
@@ -230,13 +311,20 @@ func (s *Server) handleAddonToolResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.addonCallsMu.Lock()
-	ch := s.addonCalls[req.CallID]
-	delete(s.addonCalls, req.CallID)
+	pending, ok := s.addonCalls[req.CallID]
+	if ok && pending.addon == req.Addon {
+		delete(s.addonCalls, req.CallID)
+	}
 	s.addonCallsMu.Unlock()
-	if ch == nil {
+	if !ok {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("no pending call %q (timed out?)", req.CallID))
 		return
 	}
-	ch <- addonToolResult{result: req.Result, err: req.Error}
+	if pending.addon != req.Addon {
+		logging.Warn("addon tool result rejected: addon mismatch", "callId", req.CallID, "claimed", req.Addon, "owner", pending.addon)
+		writeErr(w, http.StatusForbidden, fmt.Errorf("call %q does not belong to addon %q", req.CallID, req.Addon))
+		return
+	}
+	pending.ch <- addonToolResult{result: req.Result, err: req.Error}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

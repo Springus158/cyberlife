@@ -19,17 +19,9 @@ import (
 // that addon off takes the group's tools and endpoints down with it
 var addonBackedGroups = map[string]string{"health": "health"}
 
-// staticGroupIDs are the fixed groups below; anything else in toolGroups()
-// is a dynamic group owned by an installed addon (see addonToolGroups)
-var staticGroupIDs = map[string]bool{
-	"board": true, "health": true, "auto": true, "widgets": true, "term": true,
-	"addons": true, "projects": true, "tasks": true, "notes": true,
-	"prompts": true, "system": true,
-}
-
 func (s *Server) groupEnabled(id string) bool {
 	// An addon tool group's enable switch is the addon toggle itself
-	if !staticGroupIDs[id] {
+	if !s.staticGroupIDs()[id] {
 		if a, ok := addons.Get(id, s.manager.GetAddonsEnabled()); ok && len(a.AgentTools) > 0 {
 			return a.Enabled
 		}
@@ -106,7 +98,22 @@ type toolGroup struct {
 }
 
 func (s *Server) toolGroups() []toolGroup {
-	groups := []toolGroup{
+	return append(s.staticToolGroups(), s.addonToolGroups()...)
+}
+
+// staticGroupIDs is derived from the group table rather than hand-listed, so
+// a new core group can never be silently shadowed by an addon of the same id
+func (s *Server) staticGroupIDs() map[string]bool {
+	groups := s.staticToolGroups()
+	out := make(map[string]bool, len(groups))
+	for _, g := range groups {
+		out[g.id] = true
+	}
+	return out
+}
+
+func (s *Server) staticToolGroups() []toolGroup {
+	return []toolGroup{
 		{"board", s.mcpTools, s.callTool},
 		{"health", s.healthTools, s.callHealthTool},
 		{"auto", s.autoTools, s.callAutoTool},
@@ -119,7 +126,6 @@ func (s *Server) toolGroups() []toolGroup {
 		{"prompts", s.promptsTools, s.callWorkspaceTool},
 		{"system", s.systemTools, s.callWorkspaceTool},
 	}
-	return append(groups, s.addonToolGroups()...)
 }
 
 // groupForTool resolves a tool name by its group prefix ("board_get" -> board)

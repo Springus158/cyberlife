@@ -31,11 +31,16 @@ var KnownPermissions = []string{
 	"projects", "tasks", "notes", "prompts", "system", "gmail", "addons",
 }
 
-// hostPattern accepts bare hostnames, optionally with a "*." wildcard
-// prefix covering subdomains ("*.fakturownia.pl")
-var hostPattern = regexp.MustCompile(`^(\*\.)?[a-z0-9][a-z0-9.-]*[a-z0-9]$`)
+// hostPattern accepts dotted hostnames, optionally with a "*." wildcard
+// prefix covering subdomains ("*.fakturownia.pl"). A non-numeric TLD is
+// required so integer-encoded addresses ("2130706433" = 127.0.0.1) cannot
+// enter the allowlist as if they were names.
+var hostPattern = regexp.MustCompile(`^(\*\.)?[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)*\.[a-z]{2,}$`)
 
 var toolNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{1,39}$`)
+
+// maxToolNameLen is the MCP tool-name limit clients enforce on "<id>_<name>"
+const maxToolNameLen = 64
 
 // AgentToolDecl declares one MCP tool the addon's frontend handles via
 // cl.registerAgentTool; exposed to agents as "<addon-id>_<name>"
@@ -237,6 +242,28 @@ func validate(a Addon, dirName string) string {
 		if strings.TrimSpace(t.Description) == "" {
 			return fmt.Sprintf("agent tool %q needs a description", t.Name)
 		}
+		// One over-long name makes MCP clients reject the whole tool list,
+		// taking every unrelated core tool down with it
+		if full := len(a.ID) + 1 + len(t.Name); full > maxToolNameLen {
+			return fmt.Sprintf("agent tool %q: %q exceeds the %d-char MCP tool name limit", t.Name, a.ID+"_"+t.Name, maxToolNameLen)
+		}
+		if err := validateToolSchema(t.Schema); err != "" {
+			return fmt.Sprintf("agent tool %q: %s", t.Name, err)
+		}
+	}
+	return ""
+}
+
+func validateToolSchema(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return fmt.Sprintf("schema must be a JSON object: %v", err)
+	}
+	if t, ok := schema["type"]; ok && t != "object" {
+		return fmt.Sprintf(`schema type must be "object", got %v`, t)
 	}
 	return ""
 }

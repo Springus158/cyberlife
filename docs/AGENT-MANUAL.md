@@ -122,6 +122,9 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
 3. `addons_reload` (hot reload), then `addons_list` to check for manifest
    errors. New addons are DISABLED until enabled (`addons_set_enabled`
    or Settings → Addons) — ask the user unless they already asked.
+   Hot reload re-imports the **entry** with a cache-busting query; files it
+   imports relatively stay cached until the app restarts, so verify edits to
+   sub-modules after a restart (or keep iterating inside the entry).
 4. Never put secrets in addon files; keep values in `cl.storage`.
 5. Keyboard-first applies to addon pages too: implement `onKey`, return
    `true` for consumed keys, let Esc bubble.

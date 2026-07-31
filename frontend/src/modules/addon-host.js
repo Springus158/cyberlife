@@ -16,6 +16,8 @@ const active = new Map(); // addon id -> { addon, dispose, cleanups }
 const agentToolHandlers = new Map(); // "addonId:tool" -> async handler
 let reloadNonce = 0;
 let syncing = false;
+let resyncQueued = false;
+let pendingSync = false;
 
 export async function initAddons() {
   bus.on('addons-changed', () => {
@@ -31,12 +33,20 @@ export async function initAddons() {
 async function handleAgentToolCall(payload) {
   const { callId, addon: addonId, tool, args } = payload || {};
   if (!callId) return;
-  const respond = (body) =>
-    fetch(`${API_BASE}/api/addons/tool-result`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ callId, ...body }),
-    }).catch((err) => console.warn(`addon ${addonId}: tool result post failed:`, err));
+  const respond = async (body) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/addons/tool-result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callId, addon: addonId, ...body }),
+      });
+      if (!res.ok) {
+        console.warn(`addon ${addonId}: tool result rejected (${res.status}) — the agent call likely timed out`);
+      }
+    } catch (err) {
+      console.warn(`addon ${addonId}: tool result post failed:`, err);
+    }
+  };
   const handler = agentToolHandlers.get(`${addonId}:${tool}`);
   if (!handler) {
     await respond({ error: `addon ${addonId} has no handler for tool "${tool}" (is it enabled and loaded?)` });
@@ -56,7 +66,13 @@ export function activeAddonIds() {
 }
 
 async function syncAddons(reloadActive) {
-  if (syncing) return;
+  // A reload arriving mid-sync must not be dropped, or an addon enabled
+  // right after a reload never activates until the next unrelated change
+  if (syncing) {
+    pendingSync = pendingSync || reloadActive;
+    resyncQueued = true;
+    return;
+  }
   syncing = true;
   try {
     const info = await AddonsList();
@@ -80,6 +96,12 @@ async function syncAddons(reloadActive) {
     console.warn('addon sync failed:', err);
   } finally {
     syncing = false;
+  }
+  if (resyncQueued) {
+    const forceReload = pendingSync;
+    resyncQueued = false;
+    pendingSync = false;
+    await syncAddons(forceReload);
   }
 }
 

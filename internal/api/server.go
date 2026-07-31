@@ -68,8 +68,7 @@ type Server struct {
 	http            *http.Server
 
 	addonCallsMu sync.Mutex
-	addonCalls   map[string]chan addonToolResult
-	addonCallSeq uint64
+	addonCalls   map[string]pendingAddonCall
 }
 
 func NewServer(manager *state.Manager, hooks Hooks) *Server {
