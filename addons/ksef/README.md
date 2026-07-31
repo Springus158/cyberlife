@@ -45,10 +45,20 @@ Tokens are stored in the app's state via addon storage, never in addon
 files. All KSeF traffic goes through the app's addon HTTP proxy (the KSeF
 API sends no CORS headers); allowed hosts are declared in `addon.json`.
 
+**Credentials are agent-readable.** Addon storage is exposed through the
+`addons_storage_get` tool, so any agent with the `addons` skill enabled can
+read the KSeF and Fakturownia tokens kept here. Turn that skill off in
+Settings → Agent Skills if that is not acceptable.
+
 ## Current limitations
 
 - Correction invoices (korekty) are not issued from the addon yet — issue
   them in KSeF/Fakturownia and they'll appear via sync.
+- Only the 23/8/5/0% VAT rates are supported; `zw`/`np` and other rates are
+  rejected rather than silently mis-declared.
+- Sync reaches back at most 80 days (KSeF caps a query at 3 months) — older
+  history comes from the Fakturownia import.
 - Attachments and UPO downloads are not implemented.
-- Amount filters, PDF export of downloaded cost invoices and bank-statement
-  payment matching are future work.
+- Cost invoices are metadata-only: their XML is not downloaded, so they have
+  no line items in the detail view.
+- Amount filters and bank-statement payment matching are future work.

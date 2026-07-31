@@ -2,11 +2,11 @@
 // through the national KSeF 2.0 API, with a one-time history import from
 // Fakturownia.pl. Agent tools mirror what the UI can do.
 
-import { createStore } from './store.js';
+import { createStore, normalizeNip, assertDate } from './store.js';
 import {
   renderPage, pageOnKey, renderTodayWidget, renderUnpaidWidget, renderSettings,
 } from './page.js';
-import { syncCompany, createInvoice, sendToKsef } from './service.js';
+import { syncCompany, createInvoice, sendToKsef, today } from './service.js';
 import { importFromFakturownia } from './fakturownia.js';
 
 export default async function activate(cl) {
@@ -40,7 +40,9 @@ export default async function activate(cl) {
       if (companies.length === 1) return companies[0];
       throw new Error(`company is required; configured: ${companies.map((c) => c.name).join(', ') || 'none'}`);
     }
-    const found = companies.find((c) => c.id === ref || c.name.toLowerCase() === String(ref).toLowerCase() || c.nip === ref);
+    const found = companies.find((c) => c.id === ref
+      || c.name.toLowerCase() === String(ref).toLowerCase()
+      || (normalizeNip(ref) && normalizeNip(c.nip) === normalizeNip(ref)));
     if (!found) throw new Error(`company "${ref}" not found; configured: ${companies.map((c) => c.name).join(', ') || 'none'}`);
     return found;
   }
@@ -85,9 +87,10 @@ export default async function activate(cl) {
   });
 
   cl.registerAgentTool('mark_paid', async (args) => {
+    if (args.paidDate) assertDate(args.paidDate, 'paidDate');
     const updated = await store.updateInvoice(args.id, {
       paid: args.paid !== false,
-      paidDate: args.paid !== false ? (args.paidDate || new Date().toISOString().slice(0, 10)) : '',
+      paidDate: args.paid !== false ? (args.paidDate || today()) : '',
     });
     if (pageEl) renderPage(pageEl, deps);
     return { invoice: updated };
@@ -116,4 +119,10 @@ export default async function activate(cl) {
   });
 
   cl.log('KSeF addon active');
+
+  return () => {
+    // The page element belongs to the host and is removed on deactivate;
+    // keeping the reference would have agent tools render into a detached node
+    pageEl = null;
+  };
 }

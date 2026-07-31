@@ -27,10 +27,17 @@ export function lineVat(line) {
 // FA(3) VAT bucket index for the standard rates (P_13_x net / P_14_x VAT)
 const RATE_BUCKET = { 23: 1, 8: 2, 5: 3, 0: 6 };
 
+export const SUPPORTED_VAT_RATES = Object.keys(RATE_BUCKET).map(Number);
+
 export function computeTotals(lines) {
   const buckets = new Map();
   let gross = 0;
   for (const line of lines) {
+    // An unmapped rate would vanish from P_13/P_14 while still counting
+    // towards P_15 — a filed invoice understating its own VAT
+    if (RATE_BUCKET[line.vatRate] === undefined) {
+      throw new Error(`VAT rate ${line.vatRate}% is not supported (use ${SUPPORTED_VAT_RATES.join(', ')})`);
+    }
     const net = lineNet(line);
     const vat = lineVat(line);
     gross += net + vat;
@@ -48,10 +55,29 @@ function partyXml(tag, p) {
         p.address.line2 ? `<AdresL2>${esc(p.address.line2)}</AdresL2>` : ''
       }</Adres>`
     : '';
-  return `<${tag}><DaneIdentyfikacyjne><NIP>${esc(p.nip)}</NIP><Nazwa>${esc(p.name)}</Nazwa></DaneIdentyfikacyjne>${addr}</${tag}>`;
+  const nip = String(p.nip || '').replace(/\D/g, '');
+  if (nip && nip.length !== 10) {
+    throw new Error(`NIP "${p.nip}" must be 10 digits`);
+  }
+  // An empty <NIP/> violates the schema pattern; a buyer without one is
+  // declared as having no identifier
+  const ident = nip
+    ? `<NIP>${nip}</NIP><Nazwa>${esc(p.name)}</Nazwa>`
+    : `<BrakID>1</BrakID><Nazwa>${esc(p.name)}</Nazwa>`;
+  return `<${tag}><DaneIdentyfikacyjne>${ident}</DaneIdentyfikacyjne>${addr}</${tag}>`;
 }
 
-// invoice: {number, issueDate, currency, seller{nip,name,address?}, buyer{...}, lines[{name,unit,quantity,unitNetPrice,vatRate}]}
+function paymentXml(invoice) {
+  const parts = [];
+  if (invoice.paymentTo) parts.push(`<TerminPlatnosci><Termin>${esc(invoice.paymentTo)}</Termin></TerminPlatnosci>`);
+  if (invoice.bankAccount) {
+    parts.push(`<RachunekBankowy><NrRB>${esc(String(invoice.bankAccount).replace(/\s/g, ''))}</NrRB></RachunekBankowy>`);
+  }
+  return parts.length ? `<Platnosc>${parts.join('')}</Platnosc>` : '';
+}
+
+// invoice: {number, issueDate, currency, paymentTo?, bankAccount?,
+// seller{nip,name,address?}, buyer{...}, lines[{name,unit,quantity,unitNetPrice,vatRate}]}
 export function buildFa3Xml(invoice) {
   const totals = computeTotals(invoice.lines);
   const createdAt = invoice.createdAt || `${invoice.issueDate}T00:00:00Z`;
@@ -105,6 +131,7 @@ export function buildFa3Xml(invoice) {
     + `<P_15>${money(totals.gross)}</P_15>`
     + adnotacje
     + `<RodzajFaktury>VAT</RodzajFaktury>`
+    + paymentXml(invoice)
     + rows
     + `</Fa>`
     + `</Faktura>`

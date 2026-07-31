@@ -2,7 +2,10 @@
 // a Fakturownia.pl account. Brings numbers, payment statuses and gov_id
 // (the KSeF number, which is what dedups these against KSeF sync results).
 
+import { normalizeNip } from './store.js';
+
 const PER_PAGE = 100;
+const MAX_PAGES = 500;
 
 function isSale(f) {
   return String(f.income) === '1' || f.income === true;
@@ -11,7 +14,9 @@ function isSale(f) {
 function mapInvoice(f, company) {
   const dir = isSale(f) ? 'sale' : 'cost';
   return {
-    id: f.gov_id || `fv:${f.id}`,
+    // Fakturownia ids are per-account, so they must be namespaced or two
+    // companies' invoices would collide on lookup and updates
+    id: f.gov_id ? `ksef:${f.gov_id}` : `fv:${company.id}:${f.id}`,
     src: 'fakturownia',
     dir,
     number: f.number || '',
@@ -19,9 +24,9 @@ function mapInvoice(f, company) {
     issueDate: f.issue_date || '',
     sellDate: f.sell_date || '',
     paymentTo: f.payment_to || '',
-    sellerNip: f.seller_tax_no || (dir === 'sale' ? company.nip : ''),
+    sellerNip: normalizeNip(f.seller_tax_no || (dir === 'sale' ? company.nip : '')),
     sellerName: f.seller_name || (dir === 'sale' ? company.name : ''),
-    buyerNip: f.buyer_tax_no || '',
+    buyerNip: normalizeNip(f.buyer_tax_no),
     buyerName: f.buyer_name || '',
     net: Number(f.price_net) || 0,
     vat: Number(f.price_tax) || 0,
@@ -44,7 +49,7 @@ export async function importFromFakturownia({ http, store }, company, onProgress
   let added = 0;
   let updated = 0;
 
-  for (;;) {
+  for (; page <= MAX_PAGES; page++) {
     const res = await http({
       url: `${base}/invoices.json?period=all&page=${page}&per_page=${PER_PAGE}&api_token=${encodeURIComponent(fk.token)}`,
     });
@@ -55,6 +60,9 @@ export async function importFromFakturownia({ http, store }, company, onProgress
       throw new Error(`Fakturownia → ${res.status} ${String(res.body || '').slice(0, 200)}`);
     }
     const list = JSON.parse(res.body);
+    // Only an empty page ends the walk: the server may cap per_page below
+    // what we asked for, and stopping on a short page would silently import
+    // a fraction of the history while reporting success
     if (!Array.isArray(list) || list.length === 0) break;
 
     const result = await store.upsertInvoices(company.id, list.map((f) => mapInvoice(f, company)));
@@ -62,22 +70,21 @@ export async function importFromFakturownia({ http, store }, company, onProgress
     updated += result.updated;
     total += list.length;
 
-    for (const f of list) {
-      if (isSale(f) && f.buyer_name) {
-        await store.upsertContractor(company.id, {
-          nip: f.buyer_tax_no || '',
-          name: f.buyer_name,
-          address1: f.buyer_street || '',
-          address2: [f.buyer_post_code, f.buyer_city].filter(Boolean).join(' '),
-        });
-      }
-    }
+    // Batched: one storage write per page instead of per invoice, which
+    // would otherwise be thousands of IPC round-trips on the UI thread
+    await store.upsertContractors(company.id, list
+      .filter((f) => isSale(f) && f.buyer_name)
+      .map((f) => ({
+        nip: f.buyer_tax_no || '',
+        name: f.buyer_name,
+        address1: f.buyer_street || '',
+        address2: [f.buyer_post_code, f.buyer_city].filter(Boolean).join(' '),
+      })));
 
     onProgress?.({ page, total });
-    if (list.length < PER_PAGE) break;
-    page++;
   }
 
+  const truncated = page > MAX_PAGES;
   await store.setSyncState(company.id, { fakturowniaImportedAt: new Date().toISOString() });
-  return { total, added, updated };
+  return { total, added, updated, truncated };
 }

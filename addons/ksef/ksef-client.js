@@ -1,7 +1,7 @@
 // KSeF 2.0 REST client. All HTTP goes through the app's addon proxy
 // (cl.http) because the KSeF API sends no CORS headers. Crypto is WebCrypto:
 // RSA-OAEP(SHA-256) for the auth token and the AES session key, AES-256-CBC
-// (IV prepended) for invoice payloads, per CIRFMF/ksef-docs.
+// with PKCS#7 for invoice payloads, per CIRFMF/ksef-docs.
 
 export const KSEF_BASE_URLS = {
   test: 'https://api-test.ksef.mf.gov.pl/v2',
@@ -105,6 +105,9 @@ export class KsefClient {
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+    if (res.bodyBase64) {
+      throw new Error(`KSeF ${path} → ${res.status} returned a non-text body (${(res.body || '').length} b64 chars)`);
+    }
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`KSeF ${path} → ${res.status} ${String(res.body || '').slice(0, 300)}`);
     }
@@ -193,16 +196,16 @@ export class KsefClient {
         encryption: {
           encryptedSymmetricKey: await rsaOaepEncryptB64(rsaKey, aesKeyBytes),
           initializationVector: bytesToB64(iv),
+          publicKeyId: cert.publicKeyId,
         },
       },
     });
 
+    // The IV travels once in the session's encryption block; prepending it to
+    // the ciphertext would make KSeF decrypt it as the first plaintext block
     const xmlBytes = enc.encode(xml);
     const aesKey = await crypto.subtle.importKey('raw', aesKeyBytes, 'AES-CBC', false, ['encrypt']);
-    const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, aesKey, xmlBytes));
-    const encrypted = new Uint8Array(iv.length + cipher.length);
-    encrypted.set(iv);
-    encrypted.set(cipher, iv.length);
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, aesKey, xmlBytes));
 
     const submitted = await this.req(`/sessions/online/${session.referenceNumber}/invoices`, {
       method: 'POST',

@@ -3,6 +3,12 @@
 
 import { KsefClient } from './ksef-client.js';
 import { buildFa3Xml, computeTotals, lineNet, lineVat } from './fa3.js';
+import { assertDate, normalizeNip } from './store.js';
+
+// KSeF caps a metadata query at 3 months; a cursor older than this would
+// make every sync fail, and since the cursor only advances on success the
+// failure would be permanent
+const MAX_LOOKBACK_DAYS = 80;
 
 const KIND_BY_KSEF_TYPE = {
   Vat: 'vat', Zal: 'advance', Kor: 'correction', Roz: 'settlement',
@@ -15,11 +21,15 @@ const TOKEN_TTL_MS = 10 * 60 * 1000;
 async function accessTokenFor(http, company) {
   const cached = tokenCache.get(company.id);
   if (cached && Date.now() - cached.obtainedAt < TOKEN_TTL_MS) return cached.accessToken;
-  if (!company.ksefToken || !company.nip) {
+  const nip = normalizeNip(company.nip);
+  if (!company.ksefToken || !nip) {
     throw new Error(`company "${company.name}": set NIP and KSeF token first`);
   }
+  if (nip.length !== 10) {
+    throw new Error(`company "${company.name}": NIP must be 10 digits, got "${company.nip}"`);
+  }
   const client = new KsefClient({ http, env: company.env || 'prod' });
-  const auth = await client.authenticate({ token: company.ksefToken, nip: company.nip });
+  const auth = await client.authenticate({ token: company.ksefToken, nip });
   tokenCache.set(company.id, { accessToken: auth.accessToken, obtainedAt: Date.now() });
   return auth.accessToken;
 }
@@ -33,13 +43,16 @@ function isoDaysAgo(days) {
   return new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
+// Local date, not UTC: an invoice issued at 00:30 Warsaw time belongs to the
+// day (and the VAT month) that has just started, not the previous one
+export function today() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 
 function mapKsefMeta(m, dir) {
   return {
-    id: m.ksefNumber,
+    id: `ksef:${m.ksefNumber}`,
     src: 'ksef',
     dir,
     number: m.invoiceNumber || '',
@@ -47,9 +60,9 @@ function mapKsefMeta(m, dir) {
     issueDate: (m.issueDate || '').slice(0, 10),
     sellDate: '',
     paymentTo: '',
-    sellerNip: m.seller?.nip || '',
+    sellerNip: normalizeNip(m.seller?.nip),
     sellerName: m.seller?.name || '',
-    buyerNip: m.buyer?.identifier?.type === 'Nip' ? (m.buyer.identifier.value || '') : '',
+    buyerNip: m.buyer?.identifier?.type === 'Nip' ? normalizeNip(m.buyer.identifier.value) : '',
     buyerName: m.buyer?.name || '',
     net: m.netAmount ?? 0,
     vat: m.vatAmount ?? 0,
@@ -62,10 +75,13 @@ function mapKsefMeta(m, dir) {
   };
 }
 
-async function queryAll(client, accessToken, subjectType, from) {
+const MAX_PAGES = 100;
+
+async function queryAll(client, accessToken, subjectType, from, log) {
   const out = [];
   let hwm = null;
-  for (let pageOffset = 0; pageOffset < 100; pageOffset++) {
+  let pageOffset = 0;
+  for (; pageOffset < MAX_PAGES; pageOffset++) {
     const res = await client.queryMetadata({
       accessToken,
       subjectType,
@@ -74,9 +90,14 @@ async function queryAll(client, accessToken, subjectType, from) {
       pageOffset,
       pageSize: 100,
     });
-    out.push(...(res.invoices || []));
+    const page = res.invoices || [];
+    out.push(...page);
     hwm = res.permanentStorageHwmDate || hwm;
-    if (!res.hasMore) break;
+    if (!res.hasMore || page.length === 0) break;
+  }
+  if (pageOffset >= MAX_PAGES) {
+    log?.(`KSeF ${subjectType}: stopped at the ${MAX_PAGES}-page ceiling — some invoices were not fetched`);
+    return { invoices: out, hwm: null, truncated: true };
   }
   return { invoices: out, hwm };
 }
@@ -85,28 +106,73 @@ async function queryAll(client, accessToken, subjectType, from) {
 // overlap; dedup happens in the store. KSeF caps a query range at 3 months,
 // so the first sync starts 80 days back — older history comes from the
 // Fakturownia import.
-export async function syncCompany({ http, store }, company) {
+export async function syncCompany(deps, company) {
+  const { http, store, cl } = deps;
+  const log = (msg) => cl?.log(msg);
+  try {
+    const client = new KsefClient({ http, env: company.env || 'prod' });
+    const accessToken = await accessTokenFor(http, company);
+    const cursor = store.syncState(company.id).cursor;
+    const floor = Date.now() - MAX_LOOKBACK_DAYS * 24 * 3600 * 1000;
+    const wanted = cursor ? Date.parse(cursor) - 2 * 24 * 3600 * 1000 : floor;
+    const from = new Date(Math.max(Number.isFinite(wanted) ? wanted : floor, floor)).toISOString();
+
+    const sales = await queryAll(client, accessToken, 'Subject1', from, log);
+    const costs = await queryAll(client, accessToken, 'Subject2', from, log);
+
+    const records = [
+      ...sales.invoices.map((m) => mapKsefMeta(m, 'sale')),
+      ...costs.invoices.map((m) => mapKsefMeta(m, 'cost')),
+    ];
+    const result = await store.upsertInvoices(company.id, records);
+    await refreshPendingSends(deps, company, client, accessToken);
+    await store.setSyncState(company.id, {
+      // A truncated page walk must not advance the cursor past invoices it
+      // never saw, or they are lost for good
+      cursor: sales.hwm || costs.hwm || (sales.truncated || costs.truncated ? cursor : new Date().toISOString()),
+      lastSync: new Date().toISOString(),
+      lastError: '',
+    });
+    return { ...result, fetched: records.length };
+  } catch (err) {
+    await store.setSyncState(company.id, { lastError: String(err?.message || err) })
+      .catch((e) => log(`could not record sync error: ${e}`));
+    throw err;
+  }
+}
+
+// An invoice whose KSeF number did not arrive before the send call gave up
+// is still in flight; without this it would sit as "processing" forever
+async function refreshPendingSends({ store }, company, client, accessToken) {
+  const pending = store.listInvoices({ companyId: company.id, dir: 'sale' })
+    .filter((i) => i.sendState === 'processing' && i.sessionRef && i.invoiceRef);
+  for (const inv of pending) {
+    try {
+      const ksefNumber = await client.waitForKsefNumber({
+        accessToken,
+        sessionReferenceNumber: inv.sessionRef,
+        invoiceReferenceNumber: inv.invoiceRef,
+      }, 1);
+      if (ksefNumber) await store.updateInvoice(inv.id, { ksefNumber, sendState: 'sent' });
+    } catch (err) {
+      await store.updateInvoice(inv.id, { sendState: 'error', sendError: String(err?.message || err) });
+    }
+  }
+}
+
+export async function checkSendStatus({ http, store }, company, invoiceId) {
+  const inv = store.getInvoice(invoiceId);
+  if (!inv?.sessionRef || !inv?.invoiceRef) throw new Error('this invoice has no pending KSeF session');
   const client = new KsefClient({ http, env: company.env || 'prod' });
   const accessToken = await accessTokenFor(http, company);
-  const cursor = store.syncState(company.id).cursor;
-  const from = cursor
-    ? new Date(new Date(cursor).getTime() - 2 * 24 * 3600 * 1000).toISOString()
-    : isoDaysAgo(80);
-
-  const sales = await queryAll(client, accessToken, 'Subject1', from);
-  const costs = await queryAll(client, accessToken, 'Subject2', from);
-
-  const records = [
-    ...sales.invoices.map((m) => mapKsefMeta(m, 'sale')),
-    ...costs.invoices.map((m) => mapKsefMeta(m, 'cost')),
-  ];
-  const result = await store.upsertInvoices(company.id, records);
-  await store.setSyncState(company.id, {
-    cursor: sales.hwm || costs.hwm || new Date().toISOString(),
-    lastSync: new Date().toISOString(),
-    lastError: '',
-  });
-  return { ...result, fetched: records.length };
+  const ksefNumber = await client.waitForKsefNumber({
+    accessToken,
+    sessionReferenceNumber: inv.sessionRef,
+    invoiceReferenceNumber: inv.invoiceRef,
+  }, 1);
+  return ksefNumber
+    ? store.updateInvoice(invoiceId, { ksefNumber, sendState: 'sent' })
+    : inv;
 }
 
 export async function downloadXml({ http }, company, ksefNumber) {
@@ -118,16 +184,20 @@ export async function downloadXml({ http }, company, ksefNumber) {
 // input: {buyerNip, buyerName, buyerAddress1, buyerAddress2, lines, issueDate?,
 // sellDate?, paymentTo?, currency?, number?, kind?}
 export async function createInvoice({ store }, company, input) {
-  const issueDate = input.issueDate || today();
+  const issueDate = assertDate(input.issueDate || today(), 'issueDate');
+  if (input.paymentTo) assertDate(input.paymentTo, 'paymentTo');
+  if (input.sellDate) assertDate(input.sellDate, 'sellDate');
+  const num = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
   const lines = (input.lines || []).map((l) => ({
     name: l.name,
     unit: l.unit || 'szt',
-    quantity: Number(l.quantity) || 1,
-    unitNetPrice: Number(l.unitNetPrice) || 0,
-    vatRate: Number(l.vatRate ?? 23),
+    quantity: num(l.quantity, 1),
+    unitNetPrice: num(l.unitNetPrice, 0),
+    vatRate: num(l.vatRate, 23),
   }));
   if (!lines.length) throw new Error('at least one line is required');
   if (!input.buyerName) throw new Error('buyer name is required');
+  if (lines.some((l) => !l.name)) throw new Error('every line needs a name');
 
   const totals = computeTotals(lines);
   const net = lines.reduce((s, l) => s + lineNet(l), 0);
@@ -138,7 +208,7 @@ export async function createInvoice({ store }, company, input) {
       : store.nextNumber(company, issueDate));
 
   const record = {
-    id: `loc:${Date.now()}`,
+    id: `loc:${company.id}:${crypto.randomUUID()}`,
     src: 'local',
     dir: 'sale',
     number,
@@ -146,9 +216,9 @@ export async function createInvoice({ store }, company, input) {
     issueDate,
     sellDate: input.sellDate || issueDate,
     paymentTo: input.paymentTo || '',
-    sellerNip: company.nip,
+    sellerNip: normalizeNip(company.nip),
     sellerName: company.name,
-    buyerNip: input.buyerNip || '',
+    buyerNip: normalizeNip(input.buyerNip),
     buyerName: input.buyerName,
     buyerAddress1: input.buyerAddress1 || '',
     buyerAddress2: input.buyerAddress2 || '',
@@ -164,14 +234,12 @@ export async function createInvoice({ store }, company, input) {
     seen: today(),
   };
   await store.upsertInvoices(company.id, [record]);
-  if (input.buyerName) {
-    await store.upsertContractor(company.id, {
-      nip: input.buyerNip || '',
-      name: input.buyerName,
-      address1: input.buyerAddress1 || '',
-      address2: input.buyerAddress2 || '',
-    });
-  }
+  await store.upsertContractors(company.id, [{
+    nip: record.buyerNip,
+    name: input.buyerName,
+    address1: input.buyerAddress1 || '',
+    address2: input.buyerAddress2 || '',
+  }]);
   return record;
 }
 
@@ -180,6 +248,8 @@ export function invoiceToFa3(company, inv) {
     number: inv.number,
     issueDate: inv.issueDate,
     currency: inv.currency,
+    paymentTo: inv.paymentTo,
+    bankAccount: company.bankAccount,
     seller: {
       nip: company.nip,
       name: company.name,
@@ -200,24 +270,43 @@ export async function sendToKsef({ http, store }, company, invoiceId) {
   if (inv.src !== 'local') throw new Error('only invoices created here can be sent');
   if (inv.kind === 'proforma') throw new Error('proformas are not sent to KSeF');
   if (inv.ksefNumber) throw new Error(`already in KSeF as ${inv.ksefNumber}`);
+  // Re-sending an in-flight document files it twice, and only a korekta can
+  // undo that — check the pending session instead
+  if (inv.sendState === 'sending' || inv.sendState === 'processing') {
+    throw new Error(`invoice ${inv.number} is already in flight (${inv.sendState}) — check its KSeF status instead of re-sending`);
+  }
 
   const client = new KsefClient({ http, env: company.env || 'prod' });
   const accessToken = await accessTokenFor(http, company);
   const xml = invoiceToFa3(company, inv);
 
   await store.updateInvoice(invoiceId, { sendState: 'sending', sendError: '' });
+  let sent = null;
   try {
-    const sent = await client.sendInvoice({ accessToken, xml });
+    sent = await client.sendInvoice({ accessToken, xml });
+    // Once KSeF has accepted the payload the document is filed, so the
+    // references are recorded before anything else can fail — losing them
+    // would leave a filed invoice looking unsent and invite a duplicate
+    await store.updateInvoice(invoiceId, {
+      sendState: 'processing',
+      sessionRef: sent.sessionReferenceNumber,
+      invoiceRef: sent.invoiceReferenceNumber,
+    });
+
     const ksefNumber = await client.waitForKsefNumber({ accessToken, ...sent });
     await client.closeSession({ accessToken, sessionReferenceNumber: sent.sessionReferenceNumber })
       .catch((err) => console.warn('[addon:ksef] close session failed:', err));
-    const patch = ksefNumber
-      ? { ksefNumber, id: inv.id, sendState: 'sent' }
-      : { sendState: 'processing', sessionRef: sent.sessionReferenceNumber, invoiceRef: sent.invoiceReferenceNumber };
-    const updated = await store.updateInvoice(invoiceId, patch);
-    return updated;
+    return ksefNumber
+      ? store.updateInvoice(invoiceId, { ksefNumber, sendState: 'sent' })
+      : store.getInvoice(invoiceId);
   } catch (err) {
-    await store.updateInvoice(invoiceId, { sendState: 'error', sendError: String(err?.message || err) });
-    throw err;
+    const message = String(err?.message || err);
+    await store.updateInvoice(invoiceId, {
+      sendState: sent ? 'processing' : 'error',
+      sendError: message,
+    });
+    throw sent
+      ? new Error(`${message} — the invoice reached KSeF; use "Check KSeF status" rather than re-sending`)
+      : err;
   }
 }
