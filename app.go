@@ -136,6 +136,9 @@ func (a *App) startup(ctx context.Context) {
 			Emit: func(event string) {
 				runtime.EventsEmit(a.ctx, event, nil)
 			},
+			EmitPayload: func(event string, payload any) {
+				runtime.EventsEmit(a.ctx, event, payload)
+			},
 			WebhookFire: func(slug string, body []byte) int {
 				return a.automationEngine.FireWebhook(slug, body)
 			},

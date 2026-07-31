@@ -5,7 +5,7 @@
 
 import * as bus from './bus.js';
 import { registerAddonWidget, removeAddonWidgets, rerenderSidebarWidgets } from './widgets.js';
-import { registerAddonModule, unregisterAddonModules } from './module-host.js';
+import { registerAddonModule, unregisterAddonModules, switchToModuleId } from './module-host.js';
 import { registerAddonSettingsSection, removeAddonSettingsSections, refreshSettingsIfOpen } from './settings-dashboard.js';
 import { setBuiltinStates } from './addon-state.js';
 import { renderModuleBar, getModules, getVisibleModules } from './shell.js';
@@ -13,6 +13,7 @@ import { AddonsList, AddonStorageAll, AddonStorageSet, AddonStorageDelete } from
 import { API_BASE } from './utils.js';
 
 const active = new Map(); // addon id -> { addon, dispose, cleanups }
+const agentToolHandlers = new Map(); // "addonId:tool" -> async handler
 let reloadNonce = 0;
 let syncing = false;
 
@@ -21,7 +22,33 @@ export async function initAddons() {
     reloadNonce++;
     syncAddons(true);
   });
+  bus.on('addon-agent-tool', handleAgentToolCall);
   await syncAddons(false);
+}
+
+// An MCP call bridged from the Go server (addonbridge.go): run the addon's
+// registered handler and post the outcome back so the agent gets a response
+async function handleAgentToolCall(payload) {
+  const { callId, addon: addonId, tool, args } = payload || {};
+  if (!callId) return;
+  const respond = (body) =>
+    fetch(`${API_BASE}/api/addons/tool-result`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callId, ...body }),
+    }).catch((err) => console.warn(`addon ${addonId}: tool result post failed:`, err));
+  const handler = agentToolHandlers.get(`${addonId}:${tool}`);
+  if (!handler) {
+    await respond({ error: `addon ${addonId} has no handler for tool "${tool}" (is it enabled and loaded?)` });
+    return;
+  }
+  try {
+    const result = await handler(args ?? {});
+    await respond({ result: result ?? null });
+  } catch (err) {
+    console.warn(`addon ${addonId}: agent tool "${tool}" failed:`, err);
+    await respond({ error: String(err?.message || err) });
+  }
 }
 
 export function activeAddonIds() {
@@ -160,12 +187,46 @@ function makeContext(addon, inst) {
       registerAddonModule(addon.id, { ...desc, id: namespaced(desc.id) });
     },
 
+    openModule(id) {
+      switchToModuleId(namespaced(id));
+    },
+
     registerSettingsSection(desc) {
       if (!desc?.label || typeof desc.render !== 'function') {
         throw new Error('registerSettingsSection needs {label, render(el)}');
       }
       const id = namespaced(desc.id || 'settings');
       registerAddonSettingsSection(addon.id, { ...desc, id, icon: desc.icon || addon.icon || '🧩' });
+    },
+
+    // Outbound HTTP through the app's proxy — the webview blocks direct
+    // cross-origin calls to APIs without CORS (KSeF). Hosts must be
+    // allowlisted in addon.json "hosts".
+    async http(request) {
+      if (typeof request === 'string') request = { url: request };
+      const res = await fetch(`${API_BASE}/api/addons/http`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...request, addon: addon.id }),
+      });
+      if (!res.ok) {
+        throw new Error(`http proxy ${request.url}: ${res.status} ${await res.text()}`);
+      }
+      return res.json();
+    },
+
+    registerAgentTool(name, handler) {
+      if (typeof handler !== 'function') {
+        throw new Error('registerAgentTool needs (name, async handler(args))');
+      }
+      if (!(addon.agentTools || []).some((t) => t.name === name)) {
+        console.warn(`addon ${addon.id}: tool "${name}" is not declared in addon.json agentTools — agents will not see it`);
+      }
+      const key = `${addon.id}:${name}`;
+      agentToolHandlers.set(key, handler);
+      inst.cleanups.push(() => {
+        if (agentToolHandlers.get(key) === handler) agentToolHandlers.delete(key);
+      });
     },
 
     async api(path, body) {

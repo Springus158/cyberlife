@@ -31,6 +31,20 @@ var KnownPermissions = []string{
 	"projects", "tasks", "notes", "prompts", "system", "gmail", "addons",
 }
 
+// hostPattern accepts bare hostnames, optionally with a "*." wildcard
+// prefix covering subdomains ("*.fakturownia.pl")
+var hostPattern = regexp.MustCompile(`^(\*\.)?[a-z0-9][a-z0-9.-]*[a-z0-9]$`)
+
+var toolNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{1,39}$`)
+
+// AgentToolDecl declares one MCP tool the addon's frontend handles via
+// cl.registerAgentTool; exposed to agents as "<addon-id>_<name>"
+type AgentToolDecl struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+}
+
 type WidgetDecl struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
@@ -59,6 +73,27 @@ type Manifest struct {
 	Widgets     []WidgetDecl `json:"widgets,omitempty"`
 	Modules     []ModuleDecl `json:"modules,omitempty"`
 	Homepage    string       `json:"homepage,omitempty"`
+	// Hosts is the outbound allowlist for the addon HTTP proxy
+	// (POST /api/addons/http); requests to other hosts are refused
+	Hosts      []string        `json:"hosts,omitempty"`
+	AgentTools []AgentToolDecl `json:"agentTools,omitempty"`
+}
+
+// HostAllowed reports whether the manifest allowlists host — an exact
+// (case-insensitive) match, or any subdomain of a "*." entry
+func (m *Manifest) HostAllowed(host string) bool {
+	host = strings.ToLower(host)
+	for _, h := range m.Hosts {
+		h = strings.ToLower(h)
+		if bare, ok := strings.CutPrefix(h, "*."); ok {
+			if host == bare || strings.HasSuffix(host, "."+bare) {
+				return true
+			}
+		} else if host == h {
+			return true
+		}
+	}
+	return false
 }
 
 type Addon struct {
@@ -183,6 +218,24 @@ func validate(a Addon, dirName string) string {
 		}
 		if strings.TrimSpace(m.Label) == "" {
 			return fmt.Sprintf("module %q needs a label", m.ID)
+		}
+	}
+	for _, h := range a.Hosts {
+		if !hostPattern.MatchString(strings.ToLower(h)) {
+			return fmt.Sprintf("invalid host %q (hostname, optionally with a *. wildcard prefix)", h)
+		}
+	}
+	seenTools := make(map[string]bool)
+	for _, t := range a.AgentTools {
+		if !toolNamePattern.MatchString(t.Name) {
+			return fmt.Sprintf("agent tool %q: name must be 2-40 chars of a-z, 0-9, underscores", t.Name)
+		}
+		if seenTools[t.Name] {
+			return fmt.Sprintf("agent tool %q is declared twice", t.Name)
+		}
+		seenTools[t.Name] = true
+		if strings.TrimSpace(t.Description) == "" {
+			return fmt.Sprintf("agent tool %q needs a description", t.Name)
 		}
 	}
 	return ""

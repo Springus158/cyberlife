@@ -1,5 +1,21 @@
 export namespace addons {
 	
+	export class AgentToolDecl {
+	    name: string;
+	    description: string;
+	    schema?: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentToolDecl(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.schema = source["schema"];
+	    }
+	}
 	export class ModuleDecl {
 	    id: string;
 	    label: string;
@@ -50,6 +66,8 @@ export namespace addons {
 	    widgets?: WidgetDecl[];
 	    modules?: ModuleDecl[];
 	    homepage?: string;
+	    hosts?: string[];
+	    agentTools?: AgentToolDecl[];
 	    dir?: string;
 	    builtIn?: boolean;
 	    enabled: boolean;
@@ -74,6 +92,8 @@ export namespace addons {
 	        this.widgets = this.convertValues(source["widgets"], WidgetDecl);
 	        this.modules = this.convertValues(source["modules"], ModuleDecl);
 	        this.homepage = source["homepage"];
+	        this.hosts = source["hosts"];
+	        this.agentTools = this.convertValues(source["agentTools"], AgentToolDecl);
 	        this.dir = source["dir"];
 	        this.builtIn = source["builtIn"];
 	        this.enabled = source["enabled"];

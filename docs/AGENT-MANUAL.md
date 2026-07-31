@@ -91,7 +91,11 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
    `description`, `category` (productivity | integrations | terminal |
    widgets | automation | appearance | development | other), `tags`,
    `entry`, `permissions` (only the API groups you call), plus declared
-   `widgets`/`modules` (ids namespaced `<id>.<name>`).
+   `widgets`/`modules` (ids namespaced `<id>.<name>`). Integration addons
+   may also declare `hosts` (outbound HTTPS allowlist for `cl.http`,
+   exact hostnames or `*.domain` wildcards) and `agentTools`
+   (`[{name, description, schema}]` — exposed over MCP as
+   `<id>_<name>`, gated by the addon's enable toggle).
 2. Entry module: `export default async function activate(cl) { … }`,
    optionally return a dispose function. The `cl` context:
    - `cl.registerModule({id, label, icon, render(el), onKey, onShow})` —
@@ -104,8 +108,16 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
      `automation-run`, `addons-changed`, `state:*`) plus any custom
      addon↔addon names; automation rules can broadcast to you via the
      `emit-event` action
-   - `cl.storage.get/set/remove/all` — persisted per-addon KV (JSON)
+   - `cl.storage.get/set/remove/all` — persisted per-addon KV (JSON;
+     256 keys x 64KB per addon — chunk big datasets)
    - `cl.api(path, body?)` — REST calls allowed by manifest permissions
+   - `cl.http({url, method?, headers?, body?})` — outbound HTTPS through
+     the app proxy (webview CORS does not apply); host must be in the
+     manifest `hosts` allowlist. Returns `{status, headers, body}`.
+   - `cl.registerAgentTool(name, async handler(args))` — implements a
+     manifest `agentTools` entry; the returned value becomes the MCP
+     tool result (throw to report an error)
+   - `cl.openModule(id)` — switch the app to one of the addon's modules
    - `cl.log(…)` — prefixed console logging
 3. `addons_reload` (hot reload), then `addons_list` to check for manifest
    errors. New addons are DISABLED until enabled (`addons_set_enabled`

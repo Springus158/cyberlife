@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kalor62/cyberlife/internal/logging"
@@ -40,6 +41,7 @@ type Hooks struct {
 	JiraSync       func(projectID string) (any, error)
 	Dependencies   func() any
 	Emit           func(event string)
+	EmitPayload    func(event string, payload any)
 	WebhookFire    func(slug string, body []byte) int
 	OnAddonsChange func()
 }
@@ -60,9 +62,14 @@ type Server struct {
 	jiraSync        func(projectID string) (any, error)
 	dependencies    func() any
 	emitEvent       func(event string)
+	emitPayload     func(event string, payload any)
 	webhookFire     func(slug string, body []byte) int
 	onAddonsChange  func()
 	http            *http.Server
+
+	addonCallsMu sync.Mutex
+	addonCalls   map[string]chan addonToolResult
+	addonCallSeq uint64
 }
 
 func NewServer(manager *state.Manager, hooks Hooks) *Server {
@@ -82,6 +89,7 @@ func NewServer(manager *state.Manager, hooks Hooks) *Server {
 		jiraSync:        hooks.JiraSync,
 		dependencies:    hooks.Dependencies,
 		emitEvent:       hooks.Emit,
+		emitPayload:     hooks.EmitPayload,
 		webhookFire:     hooks.WebhookFire,
 		onAddonsChange:  hooks.OnAddonsChange,
 	}
@@ -138,6 +146,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/addons/storage/get", groupPost[addonsRequest](s, "addons", s.opAddonsStorageGet))
 	mux.HandleFunc("/api/addons/storage/set", groupPost[addonsRequest](s, "addons", s.opAddonsStorageSet))
 	mux.HandleFunc("/api/addons/storage/delete", groupPost[addonsRequest](s, "addons", s.opAddonsStorageDelete))
+	mux.HandleFunc("/api/addons/http", s.handleAddonHTTP)
+	mux.HandleFunc("/api/addons/tool-result", s.handleAddonToolResult)
 	mux.HandleFunc("/api/mail/image", s.handleMailImage)
 	mux.HandleFunc("/addons/", s.handleAddonAsset)
 	mux.HandleFunc("/api/hooks/", s.handleWebhook)
