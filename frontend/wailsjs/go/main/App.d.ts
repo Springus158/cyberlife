@@ -258,6 +258,8 @@ export function OpenProjectTask(arg1:string,arg2:string):Promise<state.TaskState
 
 export function OpenTmuxInITerm(arg1:string):Promise<void>;
 
+export function PasteClipboardToSession(arg1:string):Promise<void>;
+
 export function PathExists(arg1:string):Promise<boolean>;
 
 export function ReadFileContent(arg1:string):Promise<string>;

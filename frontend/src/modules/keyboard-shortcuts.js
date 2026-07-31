@@ -47,7 +47,9 @@ const TERM_KEY_MAP = {
 
 // Ctrl+U is the detach key, so it cannot also reach the session — everything
 // else a shell needs is forwarded.
-const TERM_CTRL_KEYS = new Set(['c', 'd', 'z', 'l', 'a', 'e', 'k', 'r']);
+// 'v' included so Ctrl+V reaches Claude Code, which reads image pastes
+// from the OS clipboard itself
+const TERM_CTRL_KEYS = new Set(['c', 'd', 'z', 'l', 'a', 'e', 'k', 'r', 'v']);
 
 function handleKeydown(e) {
   // Non-mac platforms use Ctrl+K for the palette (Cmd is a mac key);
@@ -325,7 +327,14 @@ function handleNormalKey(e) {
       e.preventDefault();
       cycleModule(1);
       return;
-    case 'i':
+    case 'i': {
+      const input = document.getElementById('itermCommandInput');
+      if (input && !input.disabled) {
+        e.preventDefault();
+        input.focus();
+      }
+      return;
+    }
     case 'a':
       if (window.itermIsViewingSession?.()) {
         e.preventDefault();

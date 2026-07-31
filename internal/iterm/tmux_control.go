@@ -224,7 +224,7 @@ func (w *tmuxControlWatcher) close() {
 func (c *Controller) captureStyledTmuxScreen(virtualID, name string) *StyledContent {
 	target := tmuxPaneTarget(name)
 	out, err := tmuxExec("capture-pane", "-p", "-e", "-t", target,
-		";", "display-message", "-p", "-t", target, "\x1f#{pane_width} #{pane_height} #{cursor_x} #{cursor_y}")
+		";", "display-message", "-p", "-t", target, "\x1f#{pane_width} #{pane_height} #{cursor_x} #{cursor_y} #{history_size}")
 	if err != nil {
 		logging.Debug("tmux capture-pane failed", "session", name, "error", err)
 		return nil
@@ -248,11 +248,14 @@ func (c *Controller) captureStyledTmuxScreen(virtualID, name string) *StyledCont
 		Cols:      80,
 	}
 	content.Rows = len(content.Lines)
-	if parts := strings.Fields(dims); len(parts) == 4 {
+	if parts := strings.Fields(dims); len(parts) >= 4 {
 		content.Cols, _ = strconv.Atoi(parts[0])
 		content.Rows, _ = strconv.Atoi(parts[1])
 		content.Cursor.X, _ = strconv.Atoi(parts[2])
 		content.Cursor.Y, _ = strconv.Atoi(parts[3])
+		if len(parts) >= 5 {
+			content.HistorySize, _ = strconv.Atoi(parts[4])
+		}
 	}
 	return content
 }

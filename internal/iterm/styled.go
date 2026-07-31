@@ -23,11 +23,12 @@ type CursorPos struct {
 
 // StyledContent represents a full screen of styled terminal content
 type StyledContent struct {
-	SessionID string        `json:"sessionId"`
-	Lines     [][]StyledRun `json:"lines"`
-	Cursor    CursorPos     `json:"cursor"`
-	Cols      int           `json:"cols"`
-	Rows      int           `json:"rows"`
+	SessionID   string        `json:"sessionId"`
+	Lines       [][]StyledRun `json:"lines"`
+	Cursor      CursorPos     `json:"cursor"`
+	Cols        int           `json:"cols"`
+	Rows        int           `json:"rows"`
+	HistorySize int           `json:"historySize"`
 }
 
 // ProfileColors represents the iTerm2 profile color palette

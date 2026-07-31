@@ -7,7 +7,8 @@ export const SHORTCUT_SECTIONS = [
     moduleId: null,
     general: true,
     rows: [
-      { keys: ['a', 'i', '↵'], desc: 'TERM — attach, keys go to the session' },
+      { keys: ['i'], desc: 'INSERT — write a prompt' },
+      { keys: ['a'], desc: 'TERM — attach, keys go to the session' },
       { keys: ['⌃', 'U'], desc: 'Detach from the session' },
       { keys: ['⌘', 'M'], desc: 'Terminal menu — voice, prompts, settings' },
       { keys: ['Esc'], desc: 'Close layer / interrupt Claude' },
@@ -32,9 +33,11 @@ export const SHORTCUT_SECTIONS = [
     moduleId: 'tab-dashboard',
     rows: [
       { keys: ['j', 'k'], desc: 'Prev / next session' },
-      { keys: ['a', 'i', '↵'], desc: 'Attach — keys go to the session' },
+      { keys: ['↵', 'i'], desc: 'Focus the command input' },
+      { keys: ['a'], desc: 'Attach — keys go to the session' },
       { keys: ['⌃', 'U'], desc: 'Detach' },
       { keys: ['n'], desc: 'New terminal' },
+      { keys: ['q'], desc: 'Toggle queue mode' },
       { keys: ['m'], desc: 'Terminal menu — voice, prompts, settings' },
       { keys: ['o'], desc: 'Open in iTerm' },
     ],

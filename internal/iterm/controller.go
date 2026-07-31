@@ -824,6 +824,8 @@ func (c *Controller) SendSpecialKeyBySessionID(sessionID string, key string) err
 		asExpr = `ASCII character 11`
 	case "ctrl-r":
 		asExpr = `ASCII character 18`
+	case "ctrl-v":
+		asExpr = `ASCII character 22`
 	case "tab":
 		asExpr = `ASCII character 9`
 	case "shift-tab":
@@ -1101,9 +1103,11 @@ func (c *Controller) StartStyledContentWatching(
 // RequestStyledHistory returns tmux scrollback as styled lines
 func (c *Controller) RequestStyledHistory(sessionID string, handler func(*StyledContent)) error {
 	if isTmuxSessionID(sessionID) {
+		lines, size := tmuxHistory(tmuxNameFromID(sessionID))
 		handler(&StyledContent{
-			SessionID: sessionID,
-			Lines:     tmuxHistory(tmuxNameFromID(sessionID)),
+			SessionID:   sessionID,
+			Lines:       lines,
+			HistorySize: size,
 		})
 		return nil
 	}

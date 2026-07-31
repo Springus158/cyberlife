@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/kalor62/cyberlife/internal/iterm"
@@ -185,9 +186,25 @@ func (a *App) PasteClipboardToSession(sessionID string) error {
 		return fmt.Errorf("clipboard read failed: %w", err)
 	}
 	if text == "" {
+		// Wails only exposes clipboard text; a copied image must be delivered
+		// as Ctrl+V so Claude Code inside the session reads the OS clipboard itself
+		if clipboardHasImage() {
+			return a.itermController.SendSpecialKeyBySessionID(sessionID, "ctrl-v")
+		}
+		logging.Debug("PasteClipboardToSession: clipboard empty", "sessionId", sessionID)
 		return nil
 	}
 	return a.itermController.PasteTextBySessionID(sessionID, text)
+}
+
+func clipboardHasImage() bool {
+	out, err := exec.Command("osascript", "-e", "clipboard info").Output()
+	if err != nil {
+		logging.Debug("clipboard info failed", "err", err)
+		return false
+	}
+	info := string(out)
+	return strings.Contains(info, "PNGf") || strings.Contains(info, "TIFF") || strings.Contains(info, "JPEG")
 }
 
 // SendITermSpecialKey sends a special key sequence to a specific iTerm2 session
@@ -215,11 +232,12 @@ func (a *App) WatchITermSession(sessionID string) string {
 				return
 			}
 			runtime.EventsEmit(a.ctx, "iterm-session-styled-content", map[string]interface{}{
-				"sessionId": content.SessionID,
-				"lines":     string(linesJSON),
-				"cursor":    map[string]interface{}{"x": content.Cursor.X, "y": content.Cursor.Y},
-				"cols":      content.Cols,
-				"rows":      content.Rows,
+				"sessionId":   content.SessionID,
+				"lines":       string(linesJSON),
+				"cursor":      map[string]interface{}{"x": content.Cursor.X, "y": content.Cursor.Y},
+				"cols":        content.Cols,
+				"rows":        content.Rows,
+				"historySize": content.HistorySize,
 			})
 		},
 		func(profile *iterm.ProfileData) {

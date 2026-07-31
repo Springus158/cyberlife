@@ -175,6 +175,7 @@ var tmuxKeyNames = map[string]string{
 	"ctrl-u":    "C-u",
 	"ctrl-k":    "C-k",
 	"ctrl-r":    "C-r",
+	"ctrl-v":    "C-v",
 	"tab":       "Tab",
 	"shift-tab": "BTab",
 	"backspace": "BSpace",
@@ -523,18 +524,20 @@ func (c *Controller) stopTmuxPolling() {
 	}
 }
 
-// tmuxHistory returns scrollback (excluding the visible screen) as styled lines
-func tmuxHistory(name string) [][]StyledRun {
+// tmuxHistory returns scrollback (excluding the visible screen) as styled
+// lines, plus the scrollback size so callers can tell when it has grown
+func tmuxHistory(name string) ([][]StyledRun, int) {
 	size, err := tmuxExec("display-message", "-p", "-t", tmuxPaneTarget(name), "#{history_size}")
 	if err != nil {
-		return [][]StyledRun{}
+		return [][]StyledRun{}, 0
 	}
-	if n, convErr := strconv.Atoi(strings.TrimSpace(size)); convErr != nil || n <= 0 {
-		return [][]StyledRun{}
+	n, convErr := strconv.Atoi(strings.TrimSpace(size))
+	if convErr != nil || n <= 0 {
+		return [][]StyledRun{}, 0
 	}
 	out, err := tmuxExec("capture-pane", "-p", "-e", "-t", tmuxPaneTarget(name), "-S", "-10000", "-E", "-1")
 	if err != nil {
-		return [][]StyledRun{}
+		return [][]StyledRun{}, 0
 	}
-	return parseStyledScreen(out)
+	return parseStyledScreen(out), n
 }

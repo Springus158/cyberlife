@@ -10,7 +10,7 @@ import { loadClaudeAccounts, buildAccountOptions, attachAccountSelect } from './
 import { buildGroupOptions, toggleGroupCollapsed, deleteGroup, openGroupModal } from './project-groups.js';
 import { refreshGitStatus } from './git.js';
 import { renderTabbedIconPicker } from './icon-catalog.js';
-import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies } from '../../wailsjs/go/main/App';
+import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, SaveScreenshot, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies } from '../../wailsjs/go/main/App';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { getMode, setMode } from './shell.js';
 import { toggleTermMenu } from './term-menu.js';
@@ -32,6 +32,7 @@ let dashboardState = {
   themeMenuOpen: false,       // dropdown visibility
   historyLines: null,          // plain text history lines (from scrollback)
   historyLoading: false,       // loading indicator
+  historySizeAtLoad: 0,        // tmux history_size when historyLines was captured
   voiceState: 'idle',
   voiceBuffer: '',
   voiceLang: 'en-US',
@@ -40,6 +41,10 @@ let dashboardState = {
   transcriptionEngine: 'native',
   elevenLabsConfigured: false,
   fullscreen: false,           // fullscreen mode (hide sidebars/tools)
+  pastedImagePath: null,       // absolute path of pasted screenshot on disk
+  pastedImageBase64: null,     // base64 data URI for thumbnail preview
+  queueMode: false,            // when true, prompts go to queue instead of terminal
+  promptQueue: [],             // queued prompts [{id, text}]
   pinnedPrompts: [],            // cached pinned prompts for quick-access buttons
   pinnedTerminals: {},           // projectName -> terminal tab name (per-project pins)
   nameOverrides: {},             // sessionId -> custom name (fallback B)
@@ -397,6 +402,7 @@ function termHintBarContent() {
   }
   return `
     <span class="term-hint-state">NORMAL</span>
+    ${chip(null, 'Enter/i', 'write in prompt')}
     ${chip('termAttachToggle', 'a', 'attach — type into session')}
     ${chip(null, 'j k', 'prev/next terminal')}
     ${chip('openProjectSwitcher', 'p', 'pick project')}
@@ -406,8 +412,20 @@ function termHintBarContent() {
   `;
 }
 
-function renderInputPanel() {
-  const sessionId = dashboardState.viewingSessionId;
+function renderWrappersToggleButton() {
+  const enabled = window.isPromptWrappersEnabled ? window.isPromptWrappersEnabled() : true;
+  const title = window.wrappersToggleTitle ? window.wrappersToggleTitle() : 'Toggle prompt wrappers';
+  return `
+    <button class="input-action-btn wrappers-toggle-btn ${enabled ? 'active' : ''}" id="wrappersToggleBtn" data-act="itermToggleWrappers" title="${title}">
+      <span class="wrappers-toggle-label">P/A</span>
+    </button>
+  `;
+}
+
+function renderInputPanel(opts = {}) {
+  const disabled = opts.disabled || false;
+  const placeholder = opts.placeholder || 'Type command and press Enter...';
+  const sessionId = opts.sessionId || dashboardState.viewingSessionId;
   return `
               <div class="term-hint-bar" id="termHintBar">${termHintBarContent()}</div>
               <div class="keyboard-helper">
@@ -489,6 +507,32 @@ function renderInputPanel() {
                     <button id="voiceStopBtn" class="voice-action-btn voice-stop-btn" data-act="itermVoiceStop" ${dashboardState.voiceState !== 'listening' ? 'disabled' : ''}>Stop & Send</button>
                   </div>
                 </div>
+              </div>
+              <div id="pastedImagePreview" class="pasted-image-preview" style="display:${dashboardState.pastedImagePath ? 'flex' : 'none'}">
+                ${dashboardState.pastedImagePath ? `
+                  <img src="${dashboardState.pastedImageBase64 || ''}" class="pasted-image-thumb" alt="Screenshot" />
+                  <span class="pasted-image-name">${(dashboardState.pastedImagePath || '').split('/').pop()}</span>
+                  <button class="pasted-image-remove" data-act="itermRemovePastedImage" title="Remove image">&times;</button>
+                ` : ''}
+              </div>
+              <div class="command-input-bar" id="commandInputBar">
+                <div class="input-left-actions">
+                  <button class="input-action-btn queue-mode-btn ${dashboardState.queueMode ? 'active' : ''}" id="queueModeBtn" data-act="itermToggleQueueMode" title="${dashboardState.queueMode ? 'Queue mode ON (q)' : 'Queue mode OFF (q)'}">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+                      <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+                    </svg>
+                  </button>
+                  <button class="input-action-btn expand-input-btn" id="expandInputBtn" data-act="itermToggleExpandInput" title="Expand input">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+                    </svg>
+                  </button>
+                  ${renderWrappersToggleButton()}
+                </div>
+                <textarea id="itermCommandInput" class="command-input" rows="3"
+                       placeholder="${placeholder}" autocomplete="off" spellcheck="false"
+                       ${disabled ? 'disabled' : ''}></textarea>
               </div>
 `;
 }
@@ -715,6 +759,28 @@ async function loadHistory() {
   }
 }
 
+// Lines that scroll off the live screen enter tmux scrollback, so a history
+// snapshot goes stale as soon as the session keeps printing — without a
+// reload the viewer shows a gap between the history block and the live area
+let historyRefreshTimer = null;
+
+function maybeRefreshHistory(historySize) {
+  if (typeof historySize !== 'number' || !dashboardState.historyLines) return;
+  if (historySize === dashboardState.historySizeAtLoad) return;
+  if (historyRefreshTimer) return;
+  historyRefreshTimer = setTimeout(() => {
+    historyRefreshTimer = null;
+    loadHistory();
+  }, 1000);
+}
+
+function cancelHistoryRefresh() {
+  if (historyRefreshTimer) {
+    clearTimeout(historyRefreshTimer);
+    historyRefreshTimer = null;
+  }
+}
+
 // Inline rename - replaces tab button text with input
 function startInlineRename(tabBtn, sessionId, currentName) {
   if (tabBtn.querySelector('.tab-rename-input')) return; // already editing
@@ -904,6 +970,213 @@ window.itermRefreshDashboard = function() {
   refreshDashboardData();
 };
 
+// Send command to viewed session
+window.itermSendCommand = async function() {
+  const input = document.getElementById('itermCommandInput');
+  const targetSession = dashboardState.viewingSessionId;
+  if (!input || !targetSession) return;
+
+  let text = input.value.trim();
+  const imagePath = dashboardState.pastedImagePath;
+
+  if (!text && !imagePath) return;
+
+  // Append image path if attached
+  if (imagePath) {
+    text = text ? text + '\n\n[Image: ' + imagePath + ']' : 'Look at this image: ' + imagePath;
+  }
+
+  // Queue mode: add to queue instead of sending
+  if (dashboardState.queueMode) {
+    dashboardState.promptQueue.push({
+      id: 'q-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+      text: text
+    });
+    input.value = '';
+    dashboardState.pastedImagePath = null;
+    dashboardState.pastedImageBase64 = null;
+    updatePastedImagePreview();
+    renderPromptQueue();
+    return;
+  }
+
+  try {
+    const wrapped = window.applyPromptWrappers ? window.applyPromptWrappers(text) : text;
+    await WriteITermTextBySessionID(targetSession, wrapped, true);
+    input.value = '';
+    // Clear attached image
+    dashboardState.pastedImagePath = null;
+    dashboardState.pastedImageBase64 = null;
+    updatePastedImagePreview();
+  } catch (err) {
+    console.error('Failed to send command:', err);
+  }
+};
+
+// Toggle queue mode
+window.itermToggleQueueMode = function() {
+  dashboardState.queueMode = !dashboardState.queueMode;
+  const btn = document.getElementById('queueModeBtn');
+  if (btn) btn.classList.toggle('active', dashboardState.queueMode);
+  renderPromptQueue();
+};
+
+// Send a queued prompt
+window.itermSendQueued = async function(id) {
+  const targetSession = dashboardState.viewingSessionId;
+  const idx = dashboardState.promptQueue.findIndex(q => q.id === id);
+  if (idx === -1 || !targetSession) return;
+
+  const item = dashboardState.promptQueue[idx];
+  try {
+    const wrapped = window.applyPromptWrappers ? window.applyPromptWrappers(item.text) : item.text;
+    await WriteITermTextBySessionID(targetSession, wrapped, true);
+    dashboardState.promptQueue.splice(idx, 1);
+    renderPromptQueue();
+  } catch (err) {
+    console.error('Failed to send queued command:', err);
+  }
+};
+
+// Remove a queued prompt
+window.itermRemoveQueued = function(id) {
+  dashboardState.promptQueue = dashboardState.promptQueue.filter(q => q.id !== id);
+  renderPromptQueue();
+};
+
+// Render prompt queue bar
+function renderPromptQueue() {
+  let bar = document.getElementById('promptQueueBar');
+  const container = document.getElementById('commandInputBar');
+  if (!container) return;
+
+  if (dashboardState.promptQueue.length === 0) {
+    if (bar) bar.remove();
+    return;
+  }
+
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'promptQueueBar';
+    bar.className = 'prompt-queue-bar';
+    container.parentNode.insertBefore(bar, container);
+  }
+
+  const escHtml = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  bar.innerHTML = dashboardState.promptQueue.map(q =>
+    `<div class="prompt-queue-item" data-id="${q.id}">
+      <button class="prompt-queue-send" data-act="itermSendQueued" data-arg="${q.id}" title="Send now">▶</button>
+      <span class="prompt-queue-text">${escHtml(q.text)}</span>
+      <button class="prompt-queue-remove" data-act="itermRemoveQueued" data-arg="${q.id}" title="Remove">&times;</button>
+    </div>`
+  ).join('');
+}
+
+// Handle clipboard paste with image detection
+async function handleClipboardPaste(e) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+
+  for (const item of items) {
+    if (item.type === 'image/png' || item.type === 'image/jpeg') {
+      e.preventDefault();
+
+      const blob = item.getAsFile();
+      if (!blob) return;
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64Full = reader.result; // data:image/png;base64,xxxxx
+        const base64Data = base64Full.split(',')[1];
+
+        const projectID = state.activeProject?.id;
+        if (!projectID) return;
+
+        const filename = `clipboard_${Date.now()}.png`;
+        try {
+          const savedPath = await SaveScreenshot(projectID, base64Data, filename);
+          dashboardState.pastedImagePath = savedPath;
+          dashboardState.pastedImageBase64 = base64Full;
+          updatePastedImagePreview();
+        } catch (err) {
+          console.error('Failed to save pasted image:', err);
+        }
+      };
+      reader.readAsDataURL(blob);
+      return;
+    }
+  }
+}
+
+// Update pasted image preview without full re-render
+function updatePastedImagePreview() {
+  let preview = document.getElementById('pastedImagePreview');
+
+  if (!dashboardState.pastedImagePath) {
+    if (preview) preview.style.display = 'none';
+    return;
+  }
+
+  if (!preview) {
+    const inputBar = document.querySelector('.command-input-bar');
+    if (!inputBar) return;
+    preview = document.createElement('div');
+    preview.id = 'pastedImagePreview';
+    preview.className = 'pasted-image-preview';
+    inputBar.parentNode.insertBefore(preview, inputBar);
+  }
+
+  const filename = dashboardState.pastedImagePath.split('/').pop();
+  preview.style.display = 'flex';
+  preview.innerHTML = `
+    <img src="${dashboardState.pastedImageBase64}" class="pasted-image-thumb" alt="Screenshot" />
+    <span class="pasted-image-name">${filename}</span>
+    <button class="pasted-image-remove" data-act="itermRemovePastedImage" title="Remove image">&times;</button>
+  `;
+}
+
+window.itermRemovePastedImage = function() {
+  dashboardState.pastedImagePath = null;
+  dashboardState.pastedImageBase64 = null;
+  updatePastedImagePreview();
+};
+
+window.itermToggleExpandInput = function() {
+  const bar = document.getElementById('commandInputBar');
+  const btn = document.getElementById('expandInputBtn');
+  const textarea = document.getElementById('itermCommandInput');
+  if (!bar || !btn) return;
+
+  const isExpanded = bar.classList.toggle('command-input-expanded');
+
+  if (isExpanded) {
+    btn.title = 'Collapse input (Esc)';
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
+    if (textarea) {
+      textarea.focus();
+      textarea._expandEscHandler = function(e) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          window.itermToggleExpandInput();
+        }
+      };
+      textarea.addEventListener('keydown', textarea._expandEscHandler);
+    }
+  } else {
+    btn.title = 'Expand input';
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>';
+    if (textarea) {
+      if (textarea._expandEscHandler) {
+        textarea.removeEventListener('keydown', textarea._expandEscHandler);
+        textarea._expandEscHandler = null;
+      }
+      textarea.focus();
+    }
+  }
+};
+
 window.itermSendKey = async function(key) {
   const targetSession = dashboardState.viewingSessionId;
   if (!targetSession) return;
@@ -975,16 +1248,23 @@ export function getAllTerminalTabs() {
 // session directly (no cursor), n opens a terminal, o jumps to iTerm
 export function termModuleOnKey(e) {
   switch (e.key) {
-    case 'Enter':
-      if (dashboardState.viewingSessionId) {
+    case 'Enter': {
+      // Enter drops you into the command input (INSERT)
+      const input = document.getElementById('itermCommandInput');
+      if (input && !input.disabled) {
         e.preventDefault();
-        setMode('term');
+        input.focus();
         return true;
       }
       return false;
+    }
     case 'm':
       e.preventDefault();
       toggleTermMenu();
+      return true;
+    case 'q':
+      e.preventDefault();
+      window.itermToggleQueueMode?.();
       return true;
     case 'j':
     case 'k': {
@@ -1159,14 +1439,19 @@ window.itermVoicePreviewBackdrop = function(e) {
 function voiceSubmitText(text) {
   if (!text) return;
   const targetSession = dashboardState.viewingSessionId;
-  if (!targetSession) return;
   if (dashboardState.voiceAutoSubmit) {
-    const wrapped = window.applyPromptWrappers ? window.applyPromptWrappers(text) : text;
-    WriteITermTextBySessionID(targetSession, wrapped, true);
+    if (targetSession) {
+      const wrapped = window.applyPromptWrappers ? window.applyPromptWrappers(text) : text;
+      WriteITermTextBySessionID(targetSession, wrapped, true);
+    }
   } else {
-    // No auto-submit: drop the text into the session's own prompt unsent so
-    // it can still be edited there before Enter
-    WriteITermTextBySessionID(targetSession, text, false);
+    const input = document.getElementById('itermCommandInput');
+    if (input) {
+      input.value = (input.value ? input.value + ' ' : '') + text;
+      input.focus();
+    } else if (targetSession) {
+      WriteITermTextBySessionID(targetSession, text, false);
+    }
   }
 }
 
@@ -1389,6 +1674,11 @@ const DASHBOARD_ACTIONS = {
   itermSelectProject: (n) => window.itermSelectProject(n),
   itermSendKey: (k) => window.itermSendKey(k),
   itermSendPinnedPrompt: (id, isGlobal) => window.itermSendPinnedPrompt(id, isGlobal),
+  itermSendQueued: (id) => window.itermSendQueued(id),
+  itermRemoveQueued: (id) => window.itermRemoveQueued(id),
+  itermToggleQueueMode: () => window.itermToggleQueueMode(),
+  itermToggleExpandInput: () => window.itermToggleExpandInput(),
+  itermRemovePastedImage: () => window.itermRemovePastedImage(),
   itermToggleWrappers: () => window.itermToggleWrappers(),
   itermRecheckDeps: () => window.itermRecheckDeps(),
   termMenuToggle: () => toggleTermMenu(),
@@ -1430,6 +1720,8 @@ export function stopViewing() {
   dashboardState.useStyledMode = false;
   dashboardState.historyLines = null;
   dashboardState.historyLoading = false;
+  dashboardState.historySizeAtLoad = 0;
+  cancelHistoryRefresh();
   try {
     UnwatchITermSession();
   } catch (err) {
@@ -1467,7 +1759,16 @@ export function showDashboardPanel(show) {
 // its handlers are delegated rather than re-attached (and inline on*= is
 // blocked by the CSP).
 function dispatchInputKeys(e) {
-  if (e.target?.id === 'voicePreviewText') window.itermVoicePreviewKeydown(e);
+  const el = e.target;
+  if (el?.id === 'itermCommandInput') {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (el.value.trim() === '' && !dashboardState.pastedImagePath) window.itermSendKey('enter');
+      else window.itermSendCommand();
+    }
+    return;
+  }
+  if (el?.id === 'voicePreviewText') window.itermVoicePreviewKeydown(e);
 }
 
 function dispatchInputChanges(e) {
@@ -1511,6 +1812,7 @@ export function initTerminalDashboard() {
       dashboardState.termSize = { cols: data.cols, rows: data.rows };
       dashboardState.useStyledMode = true;
       updateStyledOutputViewer();
+      maybeRefreshHistory(data.historySize);
     } catch (e) {
       console.error('Failed to parse styled content:', e);
     }
@@ -1521,6 +1823,9 @@ export function initTerminalDashboard() {
     try {
       dashboardState.historyLines = typeof data.lines === 'string' ? JSON.parse(data.lines) : data.lines;
       dashboardState.historyLoading = false;
+      if (typeof data.historySize === 'number') {
+        dashboardState.historySizeAtLoad = data.historySize;
+      }
 
       // Force the render and keep the reading position: everything that got
       // prepended above the fold moves scrollTop down by its own height
@@ -1938,6 +2243,7 @@ export function renderTerminalDashboard() {
   }
 
   captureVoiceTextareaSelection();
+  captureCmdInputState();
 
   panel.innerHTML = `
     <div class="terminal-dashboard">
@@ -2008,6 +2314,9 @@ export function renderTerminalDashboard() {
                 <span>Select a terminal tab to view its output</span>
               `}
             </div>
+            ${allTabs.length > 0 || isRealProject
+              ? renderInputPanel({ disabled: true, placeholder: 'Create a terminal to start typing…' })
+              : ''}
           `}
         ` : `
           <div class="output-placeholder setup-guide">
@@ -2037,8 +2346,8 @@ export function renderTerminalDashboard() {
       }
     }
 
-    // Attach smart click handler: only attach to the session if the user
-    // didn't select text
+    // Attach smart click handler: only focus the input if the user didn't
+    // select text
     const viewer = document.getElementById('itermOutputViewer');
     if (viewer && !viewer._focusHandlerAttached) {
       let mouseDownPos = null;
@@ -2051,8 +2360,8 @@ export function renderTerminalDashboard() {
         const dy = Math.abs(e.clientY - mouseDownPos.y);
         const sel = window.getSelection();
         const hasSelection = sel && sel.toString().length > 0;
-        if (dx < 3 && dy < 3 && !hasSelection && dashboardState.viewingSessionId) {
-          setMode('term');
+        if (dx < 3 && dy < 3 && !hasSelection) {
+          document.getElementById('itermCommandInput')?.focus();
         }
         mouseDownPos = null;
       });
@@ -2078,12 +2387,45 @@ export function renderTerminalDashboard() {
     });
   }
 
+  restoreCmdInputState();
+
   if (dashboardState.voiceState === 'listening') {
     restoreVoiceTextareaFocus();
   }
+  document.getElementById('itermCommandInput')?.addEventListener('paste', handleClipboardPaste);
+  renderPromptQueue();
 }
 
 let _voiceSelectionBeforeRender = null;
+let _cmdInputStateBeforeRender = null;
+
+function captureCmdInputState() {
+  const input = document.getElementById('itermCommandInput');
+  if (!input) {
+    _cmdInputStateBeforeRender = null;
+    return;
+  }
+  _cmdInputStateBeforeRender = {
+    value: input.value,
+    start: input.selectionStart,
+    end: input.selectionEnd,
+    wasFocused: document.activeElement === input
+  };
+}
+
+function restoreCmdInputState() {
+  const snap = _cmdInputStateBeforeRender;
+  _cmdInputStateBeforeRender = null;
+  if (!snap) return;
+  const input = document.getElementById('itermCommandInput');
+  if (!input) return;
+  if (snap.value) input.value = snap.value;
+  const max = input.value.length;
+  input.setSelectionRange(Math.min(snap.start, max), Math.min(snap.end, max));
+  if (snap.wasFocused && document.activeElement !== input) {
+    input.focus();
+  }
+}
 
 function captureVoiceTextareaSelection() {
   if (dashboardState.voiceState !== 'listening') {

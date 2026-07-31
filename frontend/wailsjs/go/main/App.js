@@ -502,6 +502,10 @@ export function OpenTmuxInITerm(arg1) {
   return window['go']['main']['App']['OpenTmuxInITerm'](arg1);
 }
 
+export function PasteClipboardToSession(arg1) {
+  return window['go']['main']['App']['PasteClipboardToSession'](arg1);
+}
+
 export function PathExists(arg1) {
   return window['go']['main']['App']['PathExists'](arg1);
 }

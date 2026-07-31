@@ -837,8 +837,9 @@ func (a *App) RequestStyledHistory(sessionID string) error {
 			return
 		}
 		runtime.EventsEmit(a.ctx, "iterm-session-history", map[string]interface{}{
-			"sessionId": content.SessionID,
-			"lines":     string(linesJSON),
+			"sessionId":   content.SessionID,
+			"lines":       string(linesJSON),
+			"historySize": content.HistorySize,
 		})
 	})
 }
