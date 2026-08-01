@@ -10,7 +10,7 @@ import {
 } from './page.js';
 import { renderBankPage, bankOnKey } from './bank-page.js';
 import { renderFilesPage, filesOnKey } from './files-page.js';
-import { syncCompany, createInvoice, sendToKsef, setPaid } from './service.js';
+import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid } from './service.js';
 import { importFromFakturownia } from './fakturownia.js';
 
 export default async function activate(cl) {
@@ -251,30 +251,27 @@ export default async function activate(cl) {
     }
     if (args.createInvoice) {
       const c = args.createInvoice;
-      if (c.issueDate) assertDate(c.issueDate, 'issueDate');
-      const record = {
-        id: `file:${rec.id}`,
-        src: 'file',
-        dir: c.dir === 'sale' ? 'sale' : 'cost',
-        kind: 'vat',
+      const { record, fv, fvError } = await createCostFromFile(deps, company, {
+        fileId: rec.id,
         number: c.number || rec.number || '',
         issueDate: c.issueDate || rec.docDate || `${rec.month}-01`,
         sellerNip: c.sellerNip || rec.nip || '',
         sellerName: c.sellerName || rec.name,
-        buyerNip: company.nip,
-        buyerName: company.name,
-        net: Number(c.net) || 0,
-        vat: Number(c.vat) || 0,
         gross: Number(c.gross) || rec.gross || 0,
         currency: c.currency || rec.currency || 'PLN',
+        vatRate: c.vatRate ?? rec.vatRate ?? 'disabled',
         paid: !!c.paid,
-      };
-      await store.upsertInvoices(company.id, [record]);
+      });
       const updated = await store.updateFileRec(company.id, rec.id, {
         invoiceId: record.id,
         matchedBy: args.matchedBy || 'agent (nowa)',
       });
-      return { file: updated, invoice: record };
+      return {
+        file: updated,
+        invoice: record,
+        fakturownia: fv ? { id: fv.id, number: fv.number } : null,
+        ...(fvError ? { fakturowniaError: `created locally but NOT in Fakturownia: ${fvError}` } : {}),
+      };
     }
     throw new Error('pass invoiceId or createInvoice');
   });

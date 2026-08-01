@@ -111,6 +111,19 @@ export function extractCurrency(text) {
   return best[1] > 0 ? best[0] : '';
 }
 
+// A VAT rate only counts when the document actually talks about VAT —
+// otherwise any "5%" discount would look like a tax rate
+export function extractVatRate(text) {
+  if (!/VAT|PTU|podatek/i.test(text)) return null;
+  if (/zwolnion|\bzw\.?\b/i.test(text)) return 'zw';
+  if (/odwrotne obci|reverse charge|\bnp\.?\b/i.test(text) && !/np\.\s/i.test(text)) return 'np';
+  for (const rate of [23, 8, 5]) {
+    if (new RegExp(`\\b${rate}\\s?%`).test(text)) return rate;
+  }
+  if (/\b0\s?%/.test(text)) return 0;
+  return null;
+}
+
 export function extractFields(text, ownNip) {
   const amounts = extractAmounts(text);
   return {
@@ -119,6 +132,7 @@ export function extractFields(text, ownNip) {
     amounts,
     numbers: extractInvoiceNumbers(text),
     currency: extractCurrency(text),
+    vatRate: extractVatRate(text),
   };
 }
 

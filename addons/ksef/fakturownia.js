@@ -80,6 +80,39 @@ export async function createInFakturownia({ http }, company, input, lines) {
   return created;
 }
 
+// Expense document (income: 0). The single position carries the gross
+// total with the document's VAT rate; 'disabled' skips the VAT split for
+// documents where the rate is unknown.
+export async function createCostInFakturownia({ http }, company, data) {
+  const created = await fvRequest(http, company, '/invoices.json', {
+    method: 'POST',
+    body: {
+      invoice: {
+        income: 0,
+        kind: 'vat',
+        number: data.number || null,
+        issue_date: data.issueDate,
+        sell_date: data.issueDate,
+        currency: data.currency || 'PLN',
+        seller_name: data.sellerName,
+        seller_tax_no: data.sellerNip || '',
+        buyer_name: company.name,
+        buyer_tax_no: company.nip,
+        status: data.paid ? 'paid' : 'issued',
+        ...(data.paid && data.paidDate ? { paid_date: data.paidDate } : {}),
+        positions: [{
+          name: data.positionName || `Zakup wg dokumentu ${data.number || ''}`.trim(),
+          quantity: 1,
+          total_price_gross: data.gross,
+          tax: data.vatRate ?? 'disabled',
+        }],
+      },
+    },
+  });
+  if (!created?.id) throw new Error(`Fakturownia did not return the created expense: ${JSON.stringify(created).slice(0, 200)}`);
+  return created;
+}
+
 export async function fvSendToKsef({ http }, company, fvId) {
   return fvRequest(http, company, `/invoices/${fvId}.json?send_to_ksef=yes`);
 }

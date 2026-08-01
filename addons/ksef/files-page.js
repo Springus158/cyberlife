@@ -8,6 +8,8 @@ import {
   activeCompany, openPdfOverlay, invDesc,
 } from './page.js';
 import { extractFields, matchFileToInvoice } from './files.js';
+import { createCostFromFile } from './service.js';
+import { fakturowniaMode } from './fakturownia.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const zl = (n, cur = 'PLN') => `${(Number(n) || 0).toFixed(2)} ${cur}`;
@@ -205,6 +207,7 @@ async function uploadFiles(el, deps, company, fileList) {
         docDate: fields.dates[0] || '',
         gross: fields.amounts.strong[0] || 0,
         currency: fields.currency || '',
+        vatRate: fields.vatRate ?? null,
       };
       await store.upsertFiles(company.id, [rec]);
       added++;
@@ -274,33 +277,9 @@ function openFileDetail(el, deps, company, rec) {
     close();
     rerender();
   });
-  overlay.querySelector('#fdCreate')?.addEventListener('click', async () => {
-    try {
-      const record = {
-        id: `file:${rec.id}`,
-        src: 'file',
-        dir: 'cost',
-        kind: 'vat',
-        number: rec.number || '',
-        issueDate: rec.docDate || `${rec.month || currentMonth()}-01`,
-        sellerNip: rec.nip || '',
-        sellerName: rec.name.replace(/\.(pdf|png|jpe?g)$/i, ''),
-        buyerNip: company.nip,
-        buyerName: company.name,
-        net: 0,
-        vat: 0,
-        gross: rec.gross || 0,
-        currency: rec.currency || 'PLN',
-        paid: false,
-      };
-      await store.upsertInvoices(company.id, [record]);
-      await store.updateFileRec(company.id, rec.id, { invoiceId: record.id, matchedBy: 'ręcznie (nowa)' });
-      close();
-      rerender();
-    } catch (err) {
-      deps.cl.log('files: create invoice failed:', err);
-      alert(`Nie udało się dodać faktury: ${err.message || err}`);
-    }
+  overlay.querySelector('#fdCreate')?.addEventListener('click', () => {
+    close();
+    openCreateCostForm(el, deps, company, rec);
   });
   overlay.querySelector('#fdDelete').onclick = async () => {
     if (!confirm(`Usunąć plik ${rec.name} z archiwum?`)) return;
@@ -312,6 +291,91 @@ function openFileDetail(el, deps, company, rec) {
     } catch (err) {
       deps.cl.log('files: delete failed:', err);
       alert(`Nie udało się usunąć: ${err.message || err}`);
+    }
+  };
+}
+
+const VAT_OPTIONS = [
+  ['23', 'VAT 23%'], ['8', 'VAT 8%'], ['5', 'VAT 5%'], ['0', 'VAT 0%'],
+  ['zw', 'zwolniona (zw)'], ['np', 'nie podlega (np)'], ['disabled', 'bez rozbicia VAT'],
+];
+
+// Creating an invoice record out of a document needs a human glance at the
+// extracted fields (currency and VAT above all) — and ends with explicit
+// confirmation of what landed where (system + Fakturownia in dual mode)
+function openCreateCostForm(el, deps, company, rec) {
+  const { store } = deps;
+  const dual = fakturowniaMode(company) === 'dual';
+  const defaultVat = rec.vatRate ?? (rec.currency && rec.currency !== 'PLN' ? 'np' : '23');
+  const overlay = document.createElement('div');
+  overlay.className = 'ksefad-overlay modal-overlay';
+  overlay.innerHTML = `
+    <div class="ksefad-modal lg" style="width:min(640px, 92vw)">
+      <h2 style="margin-bottom:6px">Nowa faktura kosztowa z pliku</h2>
+      <div class="ksefad-muted" style="margin-bottom:14px">${esc(rec.name)}${dual ? ' · zostanie też utworzona w Fakturowni' : ''}</div>
+      <div class="adk-form">
+        <label class="adk-field"><span>Numer dokumentu</span><input id="fcNumber" value="${esc(rec.number || '')}"></label>
+        <label class="adk-field"><span>Data wystawienia</span><input id="fcDate" type="date" value="${esc(rec.docDate || `${rec.month || currentMonth()}-01`)}"></label>
+        <label class="adk-field"><span>Sprzedawca</span><input id="fcSeller" value="${esc(rec.name.replace(/\.(pdf|png|jpe?g)$/i, '').replace(/[_-]+/g, ' '))}"></label>
+        <label class="adk-field"><span>NIP sprzedawcy</span><input id="fcNip" value="${esc(rec.nip || '')}"></label>
+        <label class="adk-field"><span>Kwota brutto</span><input id="fcGross" type="number" step="0.01" value="${rec.gross || ''}"></label>
+        <label class="adk-field"><span>Waluta</span>
+          <select id="fcCurrency">
+            ${['PLN', 'EUR', 'USD', 'GBP', 'CHF'].map((c) => `<option value="${c}" ${c === (rec.currency || 'PLN') ? 'selected' : ''}>${c}</option>`).join('')}
+          </select></label>
+        <label class="adk-field"><span>Stawka VAT</span>
+          <select id="fcVat">
+            ${VAT_OPTIONS.map(([v, l]) => `<option value="${v}" ${String(defaultVat) === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></label>
+        <label class="adk-field"><span>Status</span>
+          <select id="fcPaid"><option value="">nieopłacona</option><option value="paid">opłacona</option></select></label>
+      </div>
+      <div class="adk-actions">
+        <span class="ksefad-error" id="fcError"></span>
+        <span style="flex:1"></span>
+        <button class="adk-btn primary" id="fcSave">Utwórz fakturę</button>
+        <button class="adk-btn" id="fcCancel">Anuluj</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('#fcCancel').onclick = close;
+  overlay.querySelector('#fcSave').onclick = async () => {
+    const val = (id) => overlay.querySelector(id).value.trim();
+    const gross = Number(val('#fcGross'));
+    const fail = (msg) => { overlay.querySelector('#fcError').textContent = msg; };
+    if (!val('#fcSeller')) return fail('Sprzedawca jest wymagany');
+    if (!val('#fcDate')) return fail('Data jest wymagana');
+    if (!(gross > 0)) return fail('Kwota brutto musi być większa od zera');
+    const btn = overlay.querySelector('#fcSave');
+    btn.disabled = true;
+    btn.textContent = 'Tworzę…';
+    const vatSel = val('#fcVat');
+    try {
+      const { record, fv, fvError } = await createCostFromFile(deps, company, {
+        fileId: rec.id,
+        number: val('#fcNumber'),
+        issueDate: val('#fcDate'),
+        sellerName: val('#fcSeller'),
+        sellerNip: val('#fcNip'),
+        gross,
+        currency: val('#fcCurrency'),
+        vatRate: /^\d+$/.test(vatSel) ? Number(vatSel) : vatSel,
+        paid: val('#fcPaid') === 'paid',
+      });
+      await store.updateFileRec(company.id, rec.id, { invoiceId: record.id, matchedBy: 'ręcznie (nowa)' });
+      filesView.error = fvError ? `⚠ Faktura ${record.number || ''} dodana do systemu, ale NIE utworzona w Fakturowni: ${fvError}` : '';
+      filesView.info = fvError
+        ? ''
+        : `✓ Dodano fakturę ${record.number || record.id} (${gross.toFixed(2)} ${val('#fcCurrency')}) do systemu${fv ? ` ✓ utworzona w Fakturowni (ID ${fv.id})` : ''}`;
+      close();
+      renderFilesPage(el, deps);
+    } catch (err) {
+      deps.cl.log('files: create invoice failed:', err);
+      btn.disabled = false;
+      btn.textContent = 'Utwórz fakturę';
+      fail(`Nie udało się dodać: ${err.message || err}`);
     }
   };
 }
@@ -372,6 +436,8 @@ function openAssignFileModal(el, deps, company, rec) {
     overlay.querySelectorAll('[data-pick]').forEach((row) => {
       row.onclick = async () => {
         await store.updateFileRec(company.id, rec.id, { invoiceId: row.dataset.pick, matchedBy: 'ręcznie' });
+        const inv = store.getInvoice(row.dataset.pick);
+        filesView.info = `✓ Przypisano ${rec.name} do faktury ${inv?.number || row.dataset.pick}`;
         close();
         renderFilesPage(el, deps);
       };

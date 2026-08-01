@@ -149,10 +149,9 @@
               "issueDate": { "type": "string" },
               "sellerNip": { "type": "string" },
               "sellerName": { "type": "string" },
-              "net": { "type": "number" },
-              "vat": { "type": "number" },
-              "gross": { "type": "number" },
-              "currency": { "type": "string", "default": "PLN" },
+              "gross": { "type": "number", "description": "Gross total in the document currency" },
+              "vatRate": { "description": "23/8/5/0, or \"zw\"/\"np\"/\"disabled\"; defaults to the rate read from the document" },
+              "currency": { "type": "string", "description": "Defaults to the currency read from the document" },
               "paid": { "type": "boolean" }
             }
           }

@@ -5,7 +5,7 @@ import { KsefClient } from './ksef-client.js';
 import { buildFa3Xml, computeTotals, lineNet, lineVat } from './fa3.js';
 import { assertDate, normalizeNip } from './store.js';
 import {
-  fakturowniaMode, createInFakturownia, fvSendToKsef, fvGovStatus, fvSetPaid,
+  fakturowniaMode, createInFakturownia, createCostInFakturownia, fvSendToKsef, fvGovStatus, fvSetPaid,
   importFromFakturownia, fetchFakturowniaClients,
 } from './fakturownia.js';
 
@@ -250,6 +250,49 @@ export async function downloadXml({ http }, company, ksefNumber) {
 
 // input: {buyerNip, buyerName, buyerAddress1, buyerAddress2, lines, issueDate?,
 // sellDate?, paymentTo?, currency?, number?, kind?}
+// Cost record created from an archived document (Pliki page / attach_file
+// tool). In dual mode the expense goes to Fakturownia first — its id lands
+// on the record — and a Fakturownia failure never blocks the local record;
+// the caller shows it as a warning instead.
+export async function createCostFromFile(deps, company, data) {
+  assertDate(data.issueDate, 'issueDate');
+  const gross = Number(data.gross) || 0;
+  const numericVat = typeof data.vatRate === 'number' && Number.isFinite(data.vatRate);
+  const net = numericVat ? Math.round((gross / (1 + data.vatRate / 100)) * 100) / 100 : gross;
+  const record = {
+    id: `file:${data.fileId}`,
+    src: 'file',
+    dir: 'cost',
+    kind: 'vat',
+    number: data.number || '',
+    issueDate: data.issueDate,
+    sellerNip: normalizeNip(data.sellerNip),
+    sellerName: data.sellerName,
+    buyerNip: company.nip,
+    buyerName: company.name,
+    net,
+    vat: Math.round((gross - net) * 100) / 100,
+    gross,
+    currency: data.currency || 'PLN',
+    paid: !!data.paid,
+    ...(data.paid && data.paidDate ? { paidDate: data.paidDate } : {}),
+  };
+  let fv = null;
+  let fvError = '';
+  if (fakturowniaMode(company) === 'dual') {
+    try {
+      fv = await createCostInFakturownia(deps, company, { ...data, gross, sellerNip: record.sellerNip });
+      record.fvId = fv.id;
+      if (!record.number && fv.number) record.number = fv.number;
+    } catch (err) {
+      deps.cl.log('createCostFromFile: Fakturownia expense create failed:', err);
+      fvError = String(err?.message || err);
+    }
+  }
+  await deps.store.upsertInvoices(company.id, [record]);
+  return { record, fv, fvError };
+}
+
 export async function createInvoice(deps, company, input) {
   const { store } = deps;
   const issueDate = assertDate(input.issueDate || today(), 'issueDate');

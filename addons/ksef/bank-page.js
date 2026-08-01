@@ -16,6 +16,7 @@ const money = (n, cur = 'PLN') => `${(Number(n) || 0).toFixed(2)} ${cur}`;
 const CATEGORIES = ['opłata bankowa', 'podatek / ZUS', 'przewalutowanie', 'wynagrodzenie', 'odsetki', 'karta / prywatne', 'inne'];
 
 const bankView = {
+  query: '',
   mode: 'month',
   month: currentMonth(),
   from: '',
@@ -69,6 +70,11 @@ export function bankOnKey(e, el, deps) {
   if (document.querySelector('.ksefad-overlay')) return false;
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
+  if (e.key === '/') {
+    el.querySelector('#bankQuery')?.focus();
+    e.preventDefault();
+    return true;
+  }
   if ((e.key === '[' || e.key === ']') && bankView.mode === 'month') {
     bankView.month = monthAdd(bankView.month, e.key === '[' ? -1 : 1);
     renderBankPage(el, deps);
@@ -87,7 +93,16 @@ export function renderBankPage(el, deps) {
   }
   const company = activeCompany(store);
   const txs = company ? txsForView(store, company) : [];
-  const shown = txs.filter((t) => bankView.show[txState(t)]);
+  // Free-text search sweeps every column the table shows: dates, type,
+  // description, amounts, account, category and the paired invoice
+  const q = bankView.query.trim().toLowerCase();
+  const matchesQuery = (t) => !q || [
+    t.date, t.valueDate, t.type, t.desc, t.account, t.currency,
+    String(t.amount), t.amount.toFixed(2), t.amount.toFixed(2).replace('.', ','),
+    t.category || categorize(t), t.matchedBy,
+    t.invoiceId ? invoiceLabel(store, t.invoiceId) : '',
+  ].some((v) => String(v || '').toLowerCase().includes(q));
+  const shown = txs.filter((t) => bankView.show[txState(t)] && matchesQuery(t));
   const byAccount = new Map();
   for (const tx of shown) {
     const key = `${tx.account}|${tx.currency}`;
@@ -104,6 +119,7 @@ export function renderBankPage(el, deps) {
       <div class="ksefad-bar">
         <h2 style="margin:0; font-size:17px">🏦 Wyciągi bankowe</h2>
         ${periodBarHtml(bankView)}
+        <input id="bankQuery" placeholder="szukaj… (/)" value="${esc(bankView.query)}" style="flex:1; min-width:110px">
         <input type="file" id="bankFiles" multiple accept=".pdf" style="display:none">
         <button class="ksefad-btn primary" id="bankUpload" ${bankView.busy ? 'disabled' : ''}>${bankView.busy === 'parse' ? 'Analizuję…' : '+ Wgraj wyciągi (PDF)'}</button>
         <span style="flex:1"></span>
@@ -163,6 +179,17 @@ export function renderBankPage(el, deps) {
   el.querySelectorAll('[data-show]').forEach((cb) => {
     cb.onchange = () => { bankView.show[cb.dataset.show] = cb.checked; rerender(); };
   });
+  const query = el.querySelector('#bankQuery');
+  // Re-rendering replaces the input the user is typing into, so focus and
+  // caret have to be put back or only the first keystroke ever lands
+  query.oninput = (e) => {
+    bankView.query = e.target.value;
+    const caret = e.target.selectionStart;
+    rerender();
+    const next = el.querySelector('#bankQuery');
+    next.focus();
+    next.setSelectionRange(caret, caret);
+  };
   el.querySelector('#bankUpload').onclick = () => el.querySelector('#bankFiles').click();
   el.querySelector('#bankFiles').onchange = (e) => ingestFiles(el, deps, company, e.target.files);
   el.querySelector('#bankRematch')?.addEventListener('click', async () => {
