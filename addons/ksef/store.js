@@ -113,8 +113,18 @@ export function createStore(cl) {
     merged.src = existing.src === 'local' ? 'local' : merged.src;
     merged.id = existing.id;
     merged.ksefNumber = existing.ksefNumber || incoming.ksefNumber || '';
-    merged.paid = existing.paid || incoming.paid || false;
-    merged.paidDate = existing.paidDate || incoming.paidDate || '';
+    merged.fvId = existing.fvId || incoming.fvId || undefined;
+    // Fakturownia is the payment authority when it delivered the record (in
+    // dual mode our own paid toggles are pushed there first), so its state
+    // replaces ours — including back to unpaid. KSeF knows nothing about
+    // payments, so its records must never clear a local flag.
+    if (incoming.src === 'fakturownia') {
+      merged.paid = incoming.paid || false;
+      merged.paidDate = incoming.paidDate || '';
+    } else {
+      merged.paid = existing.paid || incoming.paid || false;
+      merged.paidDate = existing.paidDate || incoming.paidDate || '';
+    }
     merged.lines = existing.lines || incoming.lines;
     // "seen" marks arrival, so a re-fetch of the same invoice must not make
     // it look new to the today widget

@@ -6,7 +6,7 @@ import { createStore, normalizeNip, assertDate } from './store.js';
 import {
   renderPage, pageOnKey, renderTodayWidget, renderUnpaidWidget, renderSettings,
 } from './page.js';
-import { syncCompany, createInvoice, sendToKsef, today } from './service.js';
+import { syncCompany, createInvoice, sendToKsef, setPaid } from './service.js';
 import { importFromFakturownia } from './fakturownia.js';
 
 export default async function activate(cl) {
@@ -102,10 +102,9 @@ export default async function activate(cl) {
 
   cl.registerAgentTool('mark_paid', async (args) => {
     if (args.paidDate) assertDate(args.paidDate, 'paidDate');
-    const updated = await store.updateInvoice(args.id, {
-      paid: args.paid !== false,
-      paidDate: args.paid !== false ? (args.paidDate || today()) : '',
-    });
+    const inv = store.getInvoice(args.id);
+    if (!inv) throw new Error(`invoice ${args.id} not found`);
+    const updated = await setPaid(deps, store.company(inv.companyId), args.id, args.paid !== false, args.paidDate);
     if (pageEl) renderPage(pageEl, deps);
     return { invoice: updated };
   });

@@ -4,7 +4,7 @@
 // hands us.
 
 import { importFromFakturownia } from './fakturownia.js';
-import { syncCompany, createInvoice, sendToKsef, checkSendStatus, clearTokenCache, today } from './service.js';
+import { syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, clearTokenCache, today } from './service.js';
 import { lineNet, lineVat } from './fa3.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -46,8 +46,30 @@ function injectStyle() {
       display:flex; align-items:center; justify-content:center; }
     .ksefad-modal { background: var(--bg-panel, #0f172a); border:1px solid var(--border,#334155);
       border-radius:10px; padding:18px; width:min(720px, 92vw); max-height:88vh; overflow:auto; }
+    .ksefad-modal.lg { width:min(1060px, 94vw); max-height:92vh; padding:32px 40px; font-size:15px; }
+    .ksefad-modal.lg input, .ksefad-modal.lg select { padding:10px 12px; font-size:15px; border-radius:8px; }
+    .ksefad-modal.lg .ksefad-btn { padding:10px 18px; font-size:15px; border-radius:8px; }
+    .ksefad-modal.lg label { font-weight:600; }
+    .ksefad-doc-head { display:flex; justify-content:space-between; align-items:baseline; gap:16px;
+      border-bottom:1px solid var(--border,#334155); padding-bottom:14px; margin-bottom:16px; }
+    .ksefad-doc-head h2 { font-size:22px; margin:0; }
+    .ksefad-doc-dates div { margin-bottom:4px; }
+    .ksefad-doc-parties { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:18px 0; }
+    .ksefad-doc-party .ksefad-party-label { font-size:13px; opacity:.6; margin-bottom:6px; text-transform:uppercase; letter-spacing:.04em; }
+    .ksefad-doc-party .ksefad-party-name { font-size:17px; font-weight:700; margin-bottom:4px; }
+    .ksefad-doc-table { width:100%; border-collapse:collapse; margin:16px 0; font-size:15px; }
+    .ksefad-doc-table th { background:rgba(128,128,128,.12); font-weight:600; text-align:left;
+      padding:10px 12px; border:1px solid var(--border,#334155); }
+    .ksefad-doc-table td { padding:10px 12px; border:1px solid var(--border,#334155); }
+    .ksefad-doc-totals { margin-left:auto; width:max-content; font-size:16px; margin-bottom:16px; }
+    .ksefad-doc-totals div { display:flex; justify-content:flex-end; gap:24px; padding:3px 0; }
+    .ksefad-doc-totals .ksefad-doc-due { font-size:19px; font-weight:700; border-top:1px solid var(--border,#334155);
+      padding-top:8px; margin-top:6px; }
     .ksefad-grid { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+    .ksefad-modal.lg .ksefad-grid { gap:14px 18px; }
     .ksefad-lines td { padding:2px; }
+    .ksefad-modal.lg .ksefad-lines td { padding:4px; }
+    .ksefad-modal.lg .ksefad-lines input, .ksefad-modal.lg .ksefad-lines select { padding:9px 10px; }
     .ksefad-muted { opacity:.6; }
     .ksefad-error { color:#f87171; white-space:pre-wrap; }
     .ksefad-widget { display:flex; flex-direction:column; gap:4px; font-size:.95em; }
@@ -198,51 +220,91 @@ function openDetail(el, deps, id) {
   // for; without it Esc would fall through to the terminal and interrupt
   // whatever session is attached
   overlay.className = 'ksefad-overlay modal-overlay';
+  const title = inv.kind === 'proforma' ? 'Proforma' : (inv.dir === 'cost' ? 'Faktura kosztowa' : 'Faktura');
+  const party = (label, name, nip, addr1, addr2, bank) => `
+    <div class="ksefad-doc-party">
+      <div class="ksefad-party-label">${label}</div>
+      <div class="ksefad-party-name">${esc(name || '—')}</div>
+      ${addr1 ? `<div>${esc(addr1)}</div>` : ''}
+      ${addr2 ? `<div>${esc(addr2)}</div>` : ''}
+      ${nip ? `<div class="ksefad-muted">NIP ${esc(nip)}</div>` : ''}
+      ${bank ? `<div class="ksefad-muted" style="margin-top:6px">Rachunek: ${esc(bank)}</div>` : ''}
+    </div>`;
+  const isSale = inv.dir === 'sale';
   overlay.innerHTML = `
-    <div class="ksefad-modal">
-      <h3 style="margin-bottom:8px">${esc(inv.kind === 'proforma' ? 'Proforma' : 'Invoice')} ${esc(inv.number || inv.ksefNumber)}</h3>
-      <div class="ksefad-grid" style="margin-bottom:10px">
-        <div><b>Seller</b><br>${esc(inv.sellerName)}<br><span class="ksefad-muted">NIP ${esc(inv.sellerNip)}</span></div>
-        <div><b>Buyer</b><br>${esc(inv.buyerName)}<br><span class="ksefad-muted">${inv.buyerNip ? `NIP ${esc(inv.buyerNip)}` : ''}</span></div>
-        <div>Issue date: <b>${esc(inv.issueDate)}</b></div>
-        <div>Payment due: <b>${esc(inv.paymentTo || '—')}</b></div>
-        <div>Net ${zl(inv.net, inv.currency)} · VAT ${zl(inv.vat, inv.currency)}</div>
-        <div>Gross: <b>${zl(inv.gross, inv.currency)}</b></div>
-        <div>Source: ${esc(inv.src)}</div>
-        <div>KSeF: ${esc(inv.ksefNumber || inv.sendState || '—')}${inv.sendError ? `<div class="ksefad-error">${esc(inv.sendError)}</div>` : ''}</div>
+    <div class="ksefad-modal lg">
+      <div class="ksefad-doc-head">
+        <h2>${esc(title)} <b>${esc(inv.number || inv.ksefNumber)}</b></h2>
+        <div class="ksefad-doc-dates">
+          <div>Data wystawienia: <b>${esc(inv.issueDate)}</b></div>
+          ${inv.sellDate && inv.sellDate !== inv.issueDate ? `<div>Data sprzedaży: <b>${esc(inv.sellDate)}</b></div>` : ''}
+          <div>Termin płatności: <b>${esc(inv.paymentTo || '—')}</b></div>
+        </div>
+      </div>
+      <div class="ksefad-doc-parties">
+        ${party('Sprzedawca', inv.sellerName, inv.sellerNip, null, null, isSale && inv.src === 'local' ? company?.bankAccount : null)}
+        ${party('Nabywca', inv.buyerName, inv.buyerNip, inv.buyerAddress1, inv.buyerAddress2, null)}
       </div>
       ${(inv.lines || []).length ? `
-        <table class="ksefad-table" style="margin-bottom:10px">
-          <thead><tr><th>Item</th><th>Qty</th><th>Net price</th><th>VAT</th><th>Net</th></tr></thead>
-          <tbody>${inv.lines.map((l) => `<tr><td>${esc(l.name)}</td><td>${esc(l.quantity)} ${esc(l.unit)}</td>
-            <td>${zl(l.unitNetPrice, inv.currency)}</td><td>${esc(l.vatRate)}%</td><td>${zl(lineNet(l), inv.currency)}</td></tr>`).join('')}
+        <table class="ksefad-doc-table">
+          <thead><tr><th>LP</th><th>Nazwa towaru / usługi</th><th>Ilość</th><th>Cena netto</th>
+            <th>Wartość netto</th><th>VAT %</th><th>Wartość VAT</th><th>Wartość brutto</th></tr></thead>
+          <tbody>${inv.lines.map((l, i) => `<tr>
+            <td>${i + 1}</td>
+            <td>${esc(l.name)}</td>
+            <td>${esc(l.quantity)} ${esc(l.unit)}</td>
+            <td style="text-align:right">${Number(l.unitNetPrice).toFixed(2)}</td>
+            <td style="text-align:right">${lineNet(l).toFixed(2)}</td>
+            <td style="text-align:right">${esc(l.vatRate)}</td>
+            <td style="text-align:right">${lineVat(l).toFixed(2)}</td>
+            <td style="text-align:right">${(lineNet(l) + lineVat(l)).toFixed(2)}</td>
+          </tr>`).join('')}
           </tbody>
         </table>` : ''}
+      <div class="ksefad-doc-totals">
+        <div><span>Wartość netto</span><span>${zl(inv.net, inv.currency)}</span></div>
+        <div><span>Wartość VAT</span><span>${zl(inv.vat, inv.currency)}</span></div>
+        <div><span>Wartość brutto</span><span><b>${zl(inv.gross, inv.currency)}</b></span></div>
+        ${inv.kind !== 'proforma' ? `
+          <div><span>Kwota opłacona</span><span>${zl(inv.paid ? inv.gross : 0, inv.currency)}${inv.paidDate ? ` <span class="ksefad-muted">(${esc(inv.paidDate)})</span>` : ''}</span></div>
+          <div class="ksefad-doc-due"><span>Do zapłaty</span><span>${zl(inv.paid ? 0 : inv.gross, inv.currency)}</span></div>` : ''}
+      </div>
+      <div class="ksefad-muted" style="margin-bottom:14px">
+        ${inv.ksefNumber ? `Numer KSeF: <b>${esc(inv.ksefNumber)}</b>` : `KSeF: ${esc(inv.sendState || '—')}`}
+        · źródło: ${esc(inv.src)}
+        ${inv.sendError ? `<div class="ksefad-error">${esc(inv.sendError)}</div>` : ''}
+      </div>
       <div class="ksefad-bar">
-        ${inv.kind !== 'proforma' ? `<button class="ksefad-btn" id="ksefadPaid">${inv.paid ? 'Mark unpaid' : 'Mark paid'}</button>` : ''}
-        ${inv.src === 'local' ? `<button class="ksefad-btn" id="ksefadPrint">Print / PDF</button>` : ''}
+        ${inv.kind !== 'proforma' ? `<button class="ksefad-btn" id="ksefadPaid">${inv.paid ? 'Oznacz jako niezapłaconą' : 'Oznacz jako zapłaconą'}</button>` : ''}
+        ${inv.src === 'local' ? `<button class="ksefad-btn" id="ksefadPrint">Drukuj / PDF</button>` : ''}
         ${inv.sendState === 'processing' || (inv.sendState === 'error' && inv.sessionRef)
-          ? `<button class="ksefad-btn primary" id="ksefadCheck">Check KSeF status</button>` : ''}
+          ? `<button class="ksefad-btn primary" id="ksefadCheck">Sprawdź status KSeF</button>` : ''}
         ${inv.src === 'local' && !inv.ksefNumber && inv.kind !== 'proforma'
           && inv.sendState !== 'processing' && inv.sendState !== 'sending' && !inv.sessionRef
-          ? `<button class="ksefad-btn primary" id="ksefadSend">Send to KSeF</button>` : ''}
+          ? `<button class="ksefad-btn primary" id="ksefadSend">Wyślij do KSeF</button>` : ''}
         <span style="flex:1"></span>
-        <button class="ksefad-btn" id="ksefadClose">Close (Esc)</button>
+        <button class="ksefad-btn" id="ksefadClose">Zamknij (Esc)</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
   overlay.onclick = (e) => { if (e.target === overlay) close(); };
   overlay.querySelector('#ksefadClose').onclick = close;
-  overlay.querySelector('#ksefadPaid')?.addEventListener('click', async () => {
-    await store.updateInvoice(inv.id, { paid: !inv.paid, paidDate: inv.paid ? '' : today() });
-    close();
+  overlay.querySelector('#ksefadPaid')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      await setPaid(deps, company, inv.id, !inv.paid);
+      close();
+    } catch (err) {
+      e.target.disabled = false;
+      alert(`Nie udało się zmienić statusu płatności: ${err.message || err}`);
+    }
     renderPage(el, deps);
   });
   overlay.querySelector('#ksefadPrint')?.addEventListener('click', () => printInvoice(company, store.getInvoice(id)));
   overlay.querySelector('#ksefadCheck')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
-    e.target.textContent = 'Checking…';
+    e.target.textContent = 'Sprawdzanie…';
     try {
       const updated = await checkSendStatus(deps, company, inv.id);
       close();
@@ -251,20 +313,20 @@ function openDetail(el, deps, id) {
       }
     } catch (err) {
       e.target.disabled = false;
-      e.target.textContent = 'Check KSeF status';
+      e.target.textContent = 'Sprawdź status KSeF';
       alert(`Status check failed: ${err.message || err}`);
     }
     renderPage(el, deps);
   });
   overlay.querySelector('#ksefadSend')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
-    e.target.textContent = 'Sending…';
+    e.target.textContent = 'Wysyłanie…';
     try {
       await sendToKsef(deps, company, inv.id);
       close();
     } catch (err) {
       e.target.disabled = false;
-      e.target.textContent = 'Send to KSeF';
+      e.target.textContent = 'Wyślij do KSeF';
       alert(`KSeF send failed: ${err.message || err}`);
     }
     renderPage(el, deps);
@@ -285,12 +347,35 @@ function linesFromForm(modal) {
 
 function lineRowHtml(l = {}) {
   return `<tr class="ksefad-line">
-    <td><input class="l-name" placeholder="Service / product" value="${esc(l.name || '')}" style="width:100%"></td>
-    <td><input class="l-qty" type="number" step="any" value="${esc(l.quantity ?? 1)}" style="width:60px"></td>
-    <td><input class="l-unit" value="${esc(l.unit || 'szt')}" style="width:55px"></td>
-    <td><input class="l-price" type="number" step="any" value="${esc(l.unitNetPrice ?? '')}" placeholder="net" style="width:90px"></td>
+    <td><input class="l-name" placeholder="Nazwa towaru / usługi" value="${esc(l.name || '')}" style="width:100%"></td>
+    <td><input class="l-qty" type="number" step="any" value="${esc(l.quantity ?? 1)}" style="width:80px"></td>
+    <td><input class="l-unit" value="${esc(l.unit || 'szt')}" style="width:70px"></td>
+    <td><input class="l-price" type="number" step="any" value="${esc(l.unitNetPrice ?? '')}" placeholder="netto" style="width:120px"></td>
     <td><select class="l-vat">${[23, 8, 5, 0].map((r) => `<option ${r === (l.vatRate ?? 23) ? 'selected' : ''}>${r}</option>`).join('')}</select></td>
+    <td class="l-net" style="text-align:right; min-width:100px">0,00</td>
+    <td class="l-gross" style="text-align:right; min-width:100px">0,00</td>
   </tr>`;
+}
+
+function recalcFormTotals(overlay) {
+  let net = 0;
+  let vat = 0;
+  for (const row of overlay.querySelectorAll('.ksefad-line')) {
+    const line = {
+      quantity: Number(row.querySelector('.l-qty').value) || 0,
+      unitNetPrice: Number(row.querySelector('.l-price').value) || 0,
+      vatRate: Number(row.querySelector('.l-vat').value) || 0,
+    };
+    const ln = lineNet(line);
+    const lv = lineVat(line);
+    row.querySelector('.l-net').textContent = ln.toFixed(2);
+    row.querySelector('.l-gross').textContent = (ln + lv).toFixed(2);
+    net += ln;
+    vat += lv;
+  }
+  overlay.querySelector('#ksefadSumNet').textContent = net.toFixed(2);
+  overlay.querySelector('#ksefadSumVat').textContent = vat.toFixed(2);
+  overlay.querySelector('#ksefadSumGross').textContent = (net + vat).toFixed(2);
 }
 
 function openCreateForm(el, deps) {
@@ -303,33 +388,60 @@ function openCreateForm(el, deps) {
   // whatever session is attached
   overlay.className = 'ksefad-overlay modal-overlay';
   const contractors = store.contractors(companyId);
+  const sellerBoxHtml = (c) => `
+    <div class="ksefad-party-label">Sprzedawca</div>
+    <div class="ksefad-party-name">${esc(c?.name || '')}</div>
+    ${c?.address1 ? `<div>${esc(c.address1)}</div>` : ''}
+    ${c?.address2 ? `<div>${esc(c.address2)}</div>` : ''}
+    <div class="ksefad-muted">NIP ${esc(c?.nip || '—')}</div>
+    ${c?.bankAccount ? `<div class="ksefad-muted" style="margin-top:6px">Rachunek: ${esc(c.bankAccount)}</div>` : ''}`;
   overlay.innerHTML = `
-    <div class="ksefad-modal">
-      <h3 style="margin-bottom:10px">New invoice</h3>
-      <div class="ksefad-grid" style="margin-bottom:8px">
-        <label>Company<br><select id="ksefadFormCompany" style="width:100%">
+    <div class="ksefad-modal lg">
+      <h2 style="margin-bottom:20px">Nowa faktura</h2>
+      <div class="ksefad-grid" style="grid-template-columns:repeat(4, 1fr); margin-bottom:18px">
+        <label>Firma<br><select id="ksefadFormCompany" style="width:100%">
           ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === companyId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
         </select></label>
-        <label>Kind<br><select id="ksefadFormKind" style="width:100%">
-          <option value="vat">VAT invoice</option><option value="proforma">Proforma</option>
+        <label>Rodzaj<br><select id="ksefadFormKind" style="width:100%">
+          <option value="vat">Faktura VAT</option><option value="proforma">Proforma</option>
         </select></label>
-        <label>Buyer<br><input id="ksefadFormBuyer" list="ksefadContractors" style="width:100%" placeholder="name">
-          <datalist id="ksefadContractors">${contractors.map((c) => `<option value="${esc(c.name)}">`).join('')}</datalist></label>
-        <label>Buyer NIP<br><input id="ksefadFormNip" style="width:100%"></label>
-        <label>Issue date<br><input id="ksefadFormDate" type="date" value="${today()}" style="width:100%"></label>
-        <label>Payment due<br><input id="ksefadFormDue" type="date" style="width:100%"></label>
+        <label>Data wystawienia<br><input id="ksefadFormDate" type="date" value="${today()}" style="width:100%"></label>
+        <label>Termin płatności<br><input id="ksefadFormDue" type="date" style="width:100%"></label>
       </div>
-      <table class="ksefad-table ksefad-lines" style="margin-bottom:8px">
-        <thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Net price</th><th>VAT %</th></tr></thead>
+      <div class="ksefad-doc-parties" style="margin-bottom:18px">
+        <div class="ksefad-doc-party" id="ksefadFormSeller">${sellerBoxHtml(store.company(companyId))}</div>
+        <div class="ksefad-doc-party">
+          <div class="ksefad-party-label">Nabywca</div>
+          <div class="ksefad-grid" style="grid-template-columns:2fr 1fr">
+            <label>Nazwa<br><input id="ksefadFormBuyer" list="ksefadContractors" style="width:100%" placeholder="nazwa firmy / imię i nazwisko">
+              <datalist id="ksefadContractors">${contractors.map((c) => `<option value="${esc(c.name)}">`).join('')}</datalist></label>
+            <label>NIP<br><input id="ksefadFormNip" style="width:100%"></label>
+            <label>Ulica i nr<br><input id="ksefadFormAddr1" style="width:100%"></label>
+            <label>Kod i miejscowość<br><input id="ksefadFormAddr2" style="width:100%"></label>
+          </div>
+        </div>
+      </div>
+      <div class="ksefad-party-label" style="font-size:13px; opacity:.6; text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px">Pozycje</div>
+      <table class="ksefad-table ksefad-lines" style="margin-bottom:10px">
+        <thead><tr><th>Nazwa</th><th>Ilość</th><th>Jm</th><th>Cena netto</th><th>VAT %</th>
+          <th style="text-align:right">Wartość netto</th><th style="text-align:right">Wartość brutto</th></tr></thead>
         <tbody id="ksefadFormLines">${lineRowHtml()}</tbody>
       </table>
-      <div class="ksefad-bar">
-        <button class="ksefad-btn" id="ksefadAddLine">+ line</button>
+      <div class="ksefad-bar" style="margin-bottom:14px">
+        <button class="ksefad-btn" id="ksefadAddLine">+ Nowa pozycja</button>
         <span style="flex:1"></span>
+        <div class="ksefad-doc-totals" style="margin:0">
+          <div><span>Suma netto</span><span id="ksefadSumNet">0,00</span></div>
+          <div><span>Suma VAT</span><span id="ksefadSumVat">0,00</span></div>
+          <div class="ksefad-doc-due"><span>Suma brutto</span><span id="ksefadSumGross">0,00</span></div>
+        </div>
+      </div>
+      <div class="ksefad-bar">
         <span id="ksefadFormError" class="ksefad-error"></span>
-        <button class="ksefad-btn" id="ksefadSave">Save draft</button>
-        <button class="ksefad-btn primary" id="ksefadSaveSend">Save + send to KSeF</button>
-        <button class="ksefad-btn" id="ksefadCancel">Cancel</button>
+        <span style="flex:1"></span>
+        <button class="ksefad-btn" id="ksefadSave">Zapisz szkic</button>
+        <button class="ksefad-btn primary" id="ksefadSaveSend">Zapisz i wyślij do KSeF</button>
+        <button class="ksefad-btn" id="ksefadCancel">Anuluj</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -338,11 +450,22 @@ function openCreateForm(el, deps) {
   overlay.querySelector('#ksefadCancel').onclick = close;
   overlay.querySelector('#ksefadAddLine').onclick = () => {
     overlay.querySelector('#ksefadFormLines').insertAdjacentHTML('beforeend', lineRowHtml());
+    recalcFormTotals(overlay);
   };
+  overlay.querySelector('#ksefadFormLines').addEventListener('input', () => recalcFormTotals(overlay));
+  recalcFormTotals(overlay);
+  overlay.querySelector('#ksefadFormCompany').addEventListener('change', (e) => {
+    overlay.querySelector('#ksefadFormSeller').innerHTML = sellerBoxHtml(store.company(e.target.value));
+    overlay.querySelector('#ksefadContractors').innerHTML = store.contractors(e.target.value)
+      .map((c) => `<option value="${esc(c.name)}">`).join('');
+  });
   overlay.querySelector('#ksefadFormBuyer').addEventListener('change', (e) => {
     const c = store.contractors(overlay.querySelector('#ksefadFormCompany').value)
       .find((x) => x.name === e.target.value);
-    if (c) overlay.querySelector('#ksefadFormNip').value = c.nip || '';
+    if (!c) return;
+    overlay.querySelector('#ksefadFormNip').value = c.nip || '';
+    if (c.address1) overlay.querySelector('#ksefadFormAddr1').value = c.address1;
+    if (c.address2) overlay.querySelector('#ksefadFormAddr2').value = c.address2;
   });
 
   // Retrying after a failed send must not create the invoice a second time,
@@ -358,6 +481,8 @@ function openCreateForm(el, deps) {
           kind: overlay.querySelector('#ksefadFormKind').value,
           buyerName: overlay.querySelector('#ksefadFormBuyer').value.trim(),
           buyerNip: overlay.querySelector('#ksefadFormNip').value.trim(),
+          buyerAddress1: overlay.querySelector('#ksefadFormAddr1').value.trim(),
+          buyerAddress2: overlay.querySelector('#ksefadFormAddr2').value.trim(),
           issueDate: overlay.querySelector('#ksefadFormDate').value,
           paymentTo: overlay.querySelector('#ksefadFormDue').value,
           lines: linesFromForm(overlay),
@@ -368,7 +493,7 @@ function openCreateForm(el, deps) {
       close();
     } catch (err) {
       errEl.textContent = createdId
-        ? `Invoice saved as a draft, but: ${err.message || err}`
+        ? `Faktura zapisana jako szkic, ale: ${err.message || err}`
         : String(err.message || err);
     }
     renderPage(el, deps);
@@ -553,6 +678,11 @@ function companyFormHtml(c = {}) {
       <label>KSeF token<br><input data-f="ksefToken" type="password" value="${esc(c.ksefToken || '')}" style="width:100%"></label>
       <label>Fakturownia subdomain<br><input data-f="fk_subdomain" value="${esc(fk.subdomain || '')}" style="width:100%" placeholder="mycompany (.fakturownia.pl)"></label>
       <label>Fakturownia API token<br><input data-f="fk_token" type="password" value="${esc(fk.token || '')}" style="width:100%"></label>
+      <label>Tryb Fakturownia<br><select data-f="fk_mode" style="width:100%"
+        title="Dual: faktury tworzone tutaj powstają też w Fakturowni (jej numeracja), wysyłka do KSeF idzie przez Fakturownię, płatności synchronizują się w obie strony. Wyłączony: aplikacja rozmawia z KSeF bezpośrednio.">
+        <option value="dual" ${(fk.mode || 'dual') !== 'off' ? 'selected' : ''}>Dual — synchronizacja dwustronna</option>
+        <option value="off" ${fk.mode === 'off' ? 'selected' : ''}>Wyłączony — tylko KSeF</option>
+      </select></label>
     </div>`;
 }
 
@@ -596,7 +726,7 @@ export function renderSettings(el, deps) {
       numberingPattern: get('numberingPattern'),
       env: get('env') || 'prod',
       ksefToken: get('ksefToken'),
-      fakturownia: { subdomain: get('fk_subdomain'), token: get('fk_token') },
+      fakturownia: { subdomain: get('fk_subdomain'), token: get('fk_token'), mode: get('fk_mode') || 'dual' },
     };
   };
 

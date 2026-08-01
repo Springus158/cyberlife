@@ -4,6 +4,9 @@
 import { KsefClient } from './ksef-client.js';
 import { buildFa3Xml, computeTotals, lineNet, lineVat } from './fa3.js';
 import { assertDate, normalizeNip } from './store.js';
+import {
+  fakturowniaMode, createInFakturownia, fvSendToKsef, fvGovStatus, fvSetPaid, importFromFakturownia,
+} from './fakturownia.js';
 
 // KSeF caps a metadata query at 3 months; a cursor older than this would
 // make every sync fail, and since the cursor only advances on success the
@@ -114,6 +117,13 @@ export async function syncCompany(deps, company) {
   const { http, store, cl } = deps;
   const log = (msg) => cl?.log(msg);
   try {
+    // Dual mode refreshes Fakturownia first (new invoices, payment flips in
+    // both directions), so the KSeF pass below merges into fresh records.
+    // Only the recent window — the full history came from the import.
+    if (fakturowniaMode(company) === 'dual' && store.syncState(company.id).fakturowniaImportedAt) {
+      await importFromFakturownia(deps, company, null, { period: 'last_12_months' })
+        .catch((err) => log(`Fakturownia refresh failed (KSeF sync continues): ${err?.message || err}`));
+    }
     const client = new KsefClient({ http, env: company.env || 'prod' });
     const accessToken = await accessTokenFor(http, company);
     const cursor = store.syncState(company.id).cursor;
@@ -176,8 +186,34 @@ async function refreshPendingSends({ store, cl }, company, client, accessToken) 
   }
 }
 
-export async function checkSendStatus({ http, store }, company, invoiceId) {
+// Payment state lives in two places in dual mode: locally and in
+// Fakturownia — Fakturownia first, so a failed push never leaves the two
+// silently diverged
+export async function setPaid(deps, company, invoiceId, paid, paidDate) {
+  const { store } = deps;
   const inv = store.getInvoice(invoiceId);
+  if (!inv) throw new Error(`invoice ${invoiceId} not found`);
+  if (company && fakturowniaMode(company) === 'dual' && inv.fvId) {
+    await fvSetPaid(deps, company, inv.fvId, paid, paidDate || today());
+  }
+  return store.updateInvoice(invoiceId, {
+    paid: Boolean(paid),
+    paidDate: paid ? (paidDate || today()) : '',
+  });
+}
+
+export async function checkSendStatus(deps, company, invoiceId) {
+  const { http, store } = deps;
+  const inv = store.getInvoice(invoiceId);
+  if (fakturowniaMode(company) === 'dual' && inv?.fvId && !inv.ksefNumber) {
+    const st = await fvGovStatus(deps, company, inv.fvId);
+    if (st?.gov_id) return store.updateInvoice(invoiceId, { ksefNumber: st.gov_id, sendState: 'sent' });
+    if (st?.gov_status && st.gov_status.includes('error')) {
+      const details = Array.isArray(st.gov_error_messages) ? st.gov_error_messages.join('; ') : '';
+      await store.updateInvoice(invoiceId, { sendState: 'error', sendError: `${st.gov_status}${details ? `: ${details}` : ''}` });
+    }
+    return store.getInvoice(invoiceId);
+  }
   if (!inv?.sessionRef || !inv?.invoiceRef) throw new Error('this invoice has no pending KSeF session');
   const client = new KsefClient({ http, env: company.env || 'prod' });
   const accessToken = await accessTokenFor(http, company);
@@ -210,7 +246,8 @@ export async function downloadXml({ http }, company, ksefNumber) {
 
 // input: {buyerNip, buyerName, buyerAddress1, buyerAddress2, lines, issueDate?,
 // sellDate?, paymentTo?, currency?, number?, kind?}
-export async function createInvoice({ store }, company, input) {
+export async function createInvoice(deps, company, input) {
+  const { store } = deps;
   const issueDate = assertDate(input.issueDate || today(), 'issueDate');
   if (input.paymentTo) assertDate(input.paymentTo, 'paymentTo');
   if (input.sellDate) assertDate(input.sellDate, 'sellDate');
@@ -230,12 +267,23 @@ export async function createInvoice({ store }, company, input) {
   const net = lines.reduce((s, l) => s + lineNet(l), 0);
   const vat = lines.reduce((s, l) => s + lineVat(l), 0);
   const kind = input.kind || 'vat';
-  const number = input.number
+  const dual = fakturowniaMode(company) === 'dual';
+
+  // Dual mode: the document is created in Fakturownia and its number (from
+  // the account's own numbering) is authoritative — a locally generated one
+  // would collide with the sequence invoices issued there already use
+  let fvCreated = null;
+  if (dual) {
+    fvCreated = await createInFakturownia(deps, company, { ...input, kind, issueDate }, lines);
+  }
+  const number = fvCreated?.number
+    || input.number
     || (kind === 'proforma' ? store.nextNumber({ ...company, numberingPattern: company.proformaPattern || 'PRO {nr}/{mm}/{yyyy}' }, issueDate)
       : store.nextNumber(company, issueDate));
 
   const record = {
-    id: `loc:${company.id}:${crypto.randomUUID()}`,
+    id: fvCreated ? `fv:${company.id}:${fvCreated.id}` : `loc:${company.id}:${crypto.randomUUID()}`,
+    ...(fvCreated ? { fvId: fvCreated.id } : {}),
     src: 'local',
     dir: 'sale',
     number,
@@ -291,7 +339,37 @@ export function invoiceToFa3(company, inv) {
   });
 }
 
-export async function sendToKsef({ http, store }, company, invoiceId) {
+// Dual mode: Fakturownia carries the document to KSeF; we trigger the send
+// and poll its gov_* fields for the assigned number
+async function sendViaFakturownia(deps, company, inv) {
+  const { store } = deps;
+  await store.updateInvoice(inv.id, { sendState: 'sending', sendError: '' });
+  try {
+    await fvSendToKsef(deps, company, inv.fvId);
+    await store.updateInvoice(inv.id, { sendState: 'processing' });
+    for (let i = 0; i < 10; i++) {
+      const st = await fvGovStatus(deps, company, inv.fvId);
+      if (st?.gov_id) {
+        return store.updateInvoice(inv.id, { ksefNumber: st.gov_id, sendState: 'sent' });
+      }
+      if (st?.gov_status && st.gov_status.includes('error')) {
+        const details = Array.isArray(st.gov_error_messages) ? st.gov_error_messages.join('; ') : '';
+        throw Object.assign(new Error(`Fakturownia → KSeF ${st.gov_status}${details ? `: ${details}` : ''}`), { ksefRejected: true });
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    return store.getInvoice(inv.id);
+  } catch (err) {
+    await store.updateInvoice(inv.id, {
+      sendState: err?.ksefRejected ? 'error' : 'processing',
+      sendError: String(err?.message || err),
+    });
+    throw err;
+  }
+}
+
+export async function sendToKsef(deps, company, invoiceId) {
+  const { http, store } = deps;
   const inv = store.getInvoice(invoiceId);
   if (!inv) throw new Error(`invoice ${invoiceId} not found`);
   if (inv.src !== 'local') throw new Error('only invoices created here can be sent');
@@ -301,6 +379,9 @@ export async function sendToKsef({ http, store }, company, invoiceId) {
   // undo that — check the pending session instead
   if (inv.sendState === 'sending' || inv.sendState === 'processing') {
     throw new Error(`invoice ${inv.number} is already in flight (${inv.sendState}) — check its KSeF status instead of re-sending`);
+  }
+  if (fakturowniaMode(company) === 'dual' && inv.fvId) {
+    return sendViaFakturownia(deps, company, inv);
   }
 
   const client = new KsefClient({ http, env: company.env || 'prod' });

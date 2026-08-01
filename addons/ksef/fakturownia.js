@@ -1,11 +1,100 @@
-// One-time (re-runnable, idempotent) import of the full invoice history from
-// a Fakturownia.pl account. Brings numbers, payment statuses and gov_id
-// (the KSeF number, which is what dedups these against KSeF sync results).
+// Fakturownia.pl integration: idempotent history import, and — in the
+// per-company "dual" mode — two-way sync where Fakturownia stays the system
+// of record: invoices created here are created there (their numbering),
+// KSeF submission goes through their integration, and payment status flows
+// both ways.
 
 import { normalizeNip } from './store.js';
 
 const PER_PAGE = 100;
 const MAX_PAGES = 500;
+
+// 'dual' = Fakturownia is the system of record (create/send/paid go through
+// it); 'off' = this app talks to KSeF directly. Credentials without an
+// explicit mode mean dual — that is why they were configured.
+export function fakturowniaMode(company) {
+  const fk = company.fakturownia || {};
+  if (!fk.subdomain || !fk.token) return 'off';
+  return fk.mode === 'off' ? 'off' : 'dual';
+}
+
+async function fvRequest(http, company, path, { method = 'GET', body } = {}) {
+  const fk = company.fakturownia || {};
+  if (!fk.subdomain || !fk.token) {
+    throw new Error(`company "${company.name}": set the Fakturownia subdomain and API token first`);
+  }
+  const sep = path.includes('?') ? '&' : '?';
+  const res = await http({
+    url: `https://${fk.subdomain}.fakturownia.pl${path}${sep}api_token=${encodeURIComponent(fk.token)}`,
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify({ ...body, api_token: fk.token }) : undefined,
+  });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(`Fakturownia rejected the token (${res.status}) — check subdomain and api_token`);
+  }
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error(`Fakturownia ${method} ${path} → ${res.status} ${String(res.body || '').slice(0, 300)}`);
+  }
+  return res.body ? JSON.parse(res.body) : null;
+}
+
+// The combined "post_code city" line splits back into Fakturownia's separate
+// fields only when it actually starts with a postal code
+function splitAddress2(address2) {
+  const m = /^(\d{2}-\d{3})\s+(.+)$/.exec(String(address2 || '').trim());
+  return m ? { post_code: m[1], city: m[2] } : { post_code: '', city: String(address2 || '').trim() };
+}
+
+export async function createInFakturownia({ http }, company, input, lines) {
+  const addr2 = splitAddress2(input.buyerAddress2);
+  const created = await fvRequest(http, company, '/invoices.json', {
+    method: 'POST',
+    body: {
+      invoice: {
+        kind: input.kind === 'proforma' ? 'proforma' : 'vat',
+        // null → Fakturownia numbers the document by the account's own
+        // pattern, which keeps the sequence shared with invoices issued there
+        number: input.number || null,
+        issue_date: input.issueDate,
+        sell_date: input.sellDate || input.issueDate,
+        ...(input.paymentTo ? { payment_to_kind: 'other_date', payment_to: input.paymentTo } : {}),
+        buyer_name: input.buyerName,
+        buyer_tax_no: input.buyerNip || '',
+        buyer_company: Boolean(input.buyerNip),
+        buyer_street: input.buyerAddress1 || '',
+        buyer_post_code: addr2.post_code,
+        buyer_city: addr2.city,
+        currency: input.currency || 'PLN',
+        positions: lines.map((l) => ({
+          name: l.name,
+          quantity: l.quantity,
+          quantity_unit: l.unit || 'szt',
+          tax: l.vatRate,
+          price_net: l.unitNetPrice,
+        })),
+      },
+    },
+  });
+  if (!created?.id) throw new Error(`Fakturownia did not return the created invoice: ${JSON.stringify(created).slice(0, 200)}`);
+  return created;
+}
+
+export async function fvSendToKsef({ http }, company, fvId) {
+  return fvRequest(http, company, `/invoices/${fvId}.json?send_to_ksef=yes`);
+}
+
+export async function fvGovStatus({ http }, company, fvId) {
+  return fvRequest(http, company,
+    `/invoices/${fvId}.json?fields[invoice]=gov_status,gov_id,gov_error_messages,number`);
+}
+
+export async function fvSetPaid({ http }, company, fvId, paid, paidDate) {
+  return fvRequest(http, company, `/invoices/${fvId}.json`, {
+    method: 'PUT',
+    body: { invoice: paid ? { status: 'paid', paid_date: paidDate } : { status: 'issued', paid_date: '' } },
+  });
+}
 
 function isSale(f) {
   return String(f.income) === '1' || f.income === true;
@@ -36,6 +125,7 @@ function mapInvoice(f, company) {
     // Fakturownia ids are per-account, so they must be namespaced or two
     // companies' invoices would collide on lookup and updates
     id: f.gov_id ? `ksef:${f.gov_id}` : `fv:${company.id}:${f.id}`,
+    fvId: f.id,
     src: 'fakturownia',
     dir,
     number: f.number || '',
@@ -57,7 +147,7 @@ function mapInvoice(f, company) {
   };
 }
 
-export async function importFromFakturownia({ http, store }, company, onProgress) {
+export async function importFromFakturownia({ http, store }, company, onProgress, { period = 'all' } = {}) {
   const fk = company.fakturownia || {};
   if (!fk.subdomain || !fk.token) {
     throw new Error(`company "${company.name}": set the Fakturownia subdomain and API token first`);
@@ -69,7 +159,7 @@ export async function importFromFakturownia({ http, store }, company, onProgress
     let page = 1;
     for (; page <= MAX_PAGES; page++) {
       const res = await http({
-        url: `${base}/invoices.json?period=all&page=${page}&per_page=${PER_PAGE}${extraQuery}&api_token=${encodeURIComponent(fk.token)}`,
+        url: `${base}/invoices.json?period=${period}&page=${page}&per_page=${PER_PAGE}${extraQuery}&api_token=${encodeURIComponent(fk.token)}`,
       });
       if (res.status === 401 || res.status === 403) {
         throw new Error(`Fakturownia rejected the token (${res.status}) — check subdomain and api_token`);
@@ -111,6 +201,8 @@ export async function importFromFakturownia({ http, store }, company, onProgress
   await walkPages('');
   await walkPages('&income=no');
 
-  await store.setSyncState(company.id, { fakturowniaImportedAt: new Date().toISOString() });
+  if (period === 'all') {
+    await store.setSyncState(company.id, { fakturowniaImportedAt: new Date().toISOString() });
+  }
   return { total: tally.total, added: tally.added, updated: tally.updated, truncated: tally.truncated };
 }

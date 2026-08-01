@@ -23,6 +23,15 @@ rules, this addon is not for you.
   sync results). Numbering continues your Fakturownia pattern
   (`{nr}/{mm}/{yyyy}` tokens) and the print view mirrors Fakturownia's
   classic template.
+- **Dual mode (per company)** — with *Tryb Fakturownia: Dual* the
+  Fakturownia account stays the system of record: invoices created here are
+  created there too (their numbering wins), the KSeF submission goes
+  through Fakturownia's integration (`send_to_ksef`), paid/unpaid toggles
+  are pushed to Fakturownia first, and every KSeF sync also refreshes the
+  last 12 months from Fakturownia — both directions, deduplicated by KSeF
+  number or invoice number + NIP. Switch the mode to *Wyłączony* for an
+  entity that should talk to KSeF directly (no Fakturownia account
+  needed).
 - **Multi-company** — each company has its own NIP, KSeF token and optional
   Fakturownia account.
 - **Agent tools** — `ksef_list_invoices`, `ksef_create_invoice`,
