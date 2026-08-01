@@ -256,10 +256,11 @@ export function matchTransactions(txs, invoices, opts = {}) {
       byNumber.get(key).push(inv);
     }
   }
-  // An invoice consumed by any amount-based rule in this run cannot be
-  // handed to a second transaction — identical amounts would otherwise all
-  // point at the same document
-  const used = new Set(txs.map((t) => t.invoiceId).filter(Boolean));
+  // An invoice consumed by any amount-based rule cannot be handed to a
+  // second transaction — identical monthly amounts (ZUS, salaries) would
+  // otherwise all point at the same document. opts.usedInvoiceIds extends
+  // the guard across months, since a run usually covers just one bucket.
+  const used = new Set([...txs.map((t) => t.invoiceId).filter(Boolean), ...(opts.usedInvoiceIds || [])]);
   return txs.map((tx) => {
     if (tx.invoiceId || tx.category) return tx;
     const wantDir = tx.amount < 0 ? 'cost' : 'sale';
@@ -276,7 +277,7 @@ export function matchTransactions(txs, invoices, opts = {}) {
         : key.length >= 4 && descNorm.includes(key);
       if (!present) continue;
       for (const inv of invs) {
-        if (inv.dir !== wantDir) continue;
+        if (inv.dir !== wantDir || used.has(inv.id)) continue;
         if (amountOk(inv)) {
           used.add(inv.id);
           return { ...tx, invoiceId: inv.id, matchedBy: 'numer + kwota', auto: true };

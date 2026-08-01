@@ -53,6 +53,18 @@ function txsForView(store, company) {
       || a.date.localeCompare(b.date));
 }
 
+// Assignments in OTHER months must stay off-limits for amount rules —
+// without this every month's ZUS transfer lands on the same document
+function usedOutsideMonths(store, company, months) {
+  const skip = new Set(months);
+  const used = new Set();
+  for (const m of store.bankMonths(company.id)) {
+    if (skip.has(m)) continue;
+    for (const t of store.bankMonth(company.id, m)) if (t.invoiceId) used.add(t.invoiceId);
+  }
+  return used;
+}
+
 async function patchTx(store, company, tx, patch) {
   const month = tx.date.slice(0, 7);
   const list = store.bankMonth(company.id, month);
@@ -221,7 +233,10 @@ export function renderBankPage(el, deps) {
     const cleared = matchTransactions(
       txs.map((t) => (t.auto ? { ...t, invoiceId: '', matchedBy: '', category: '' } : t)),
       invoices,
-      { accounts: store.clientAccounts(company.id) },
+      {
+        accounts: store.clientAccounts(company.id),
+        usedInvoiceIds: usedOutsideMonths(store, company, new Set(txs.map((t) => t.date.slice(0, 7)))),
+      },
     );
     for (const t of cleared) await patchTx(store, company, t, t);
     rerender();
@@ -431,7 +446,7 @@ async function ingestFiles(el, deps, company, files) {
         return old ? { ...t, invoiceId: old.invoiceId, matchedBy: old.matchedBy, category: old.category, auto: old.auto } : t;
       });
       await store.saveBankMonth(company.id, month,
-        [...kept, ...matchTransactions(merged, invoices, { accounts: store.clientAccounts(company.id) })]
+        [...kept, ...matchTransactions(merged, invoices, { accounts: store.clientAccounts(company.id), usedInvoiceIds: usedOutsideMonths(store, company, [month]) })]
           .sort((a, b) => a.account.localeCompare(b.account)
             || (a.seq ?? 0) - (b.seq ?? 0)
             || a.date.localeCompare(b.date)));
