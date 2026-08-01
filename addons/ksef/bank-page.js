@@ -23,7 +23,13 @@ const bankView = {
   busy: '',
   error: '',
   info: '',
+  show: { ok: true, warn: true, bad: true },
 };
+
+function txState(tx) {
+  if (tx.invoiceId) return 'ok';
+  return (tx.category || categorize(tx)) ? 'warn' : 'bad';
+}
 
 // Transactions live in buckets keyed by their OWN operation month — the
 // picker only selects what is shown, never where an upload lands
@@ -83,14 +89,15 @@ export function renderBankPage(el, deps) {
   }
   const company = activeCompany(store);
   const txs = company ? txsForView(store, company) : [];
+  const shown = txs.filter((t) => bankView.show[txState(t)]);
   const byAccount = new Map();
-  for (const tx of txs) {
+  for (const tx of shown) {
     const key = `${tx.account}|${tx.currency}`;
     if (!byAccount.has(key)) byAccount.set(key, []);
     byAccount.get(key).push(tx);
   }
-  const matched = txs.filter((t) => t.invoiceId).length;
-  const categorized = txs.filter((t) => !t.invoiceId && t.category).length;
+  const matched = txs.filter((t) => txState(t) === 'ok').length;
+  const categorized = txs.filter((t) => txState(t) === 'warn').length;
   const open = txs.length - matched - categorized;
   const months = company ? store.bankMonths(company.id) : [];
 
@@ -113,7 +120,13 @@ export function renderBankPage(el, deps) {
       </div>
       ${bankView.error ? `<div class="ksefad-error">${esc(bankView.error)}</div>` : ''}
       ${bankView.info ? `<div class="ksefad-muted">${esc(bankView.info)}</div>` : ''}
-      ${txs.length ? `<div class="ksefad-muted">${txs.length} operacji · dopasowane do faktur: <b>${matched}</b> · skategoryzowane: <b>${categorized}</b> · do przejrzenia: <b>${open}</b></div>` : ''}
+      ${txs.length ? `
+        <div class="ksefad-bar ksefad-muted" style="gap:16px">
+          <span>${txs.length} operacji, pokazuję ${shown.length}:</span>
+          <label style="color:var(--success, #a6e3a1)"><input type="checkbox" data-show="ok" ${bankView.show.ok ? 'checked' : ''}> przypisane (${matched})</label>
+          <label style="color:var(--warning, #f9e2af)"><input type="checkbox" data-show="warn" ${bankView.show.warn ? 'checked' : ''}> opłaty / kategorie (${categorized})</label>
+          <label style="color:var(--error, #f38ba8)"><input type="checkbox" data-show="bad" ${bankView.show.bad ? 'checked' : ''}> nieprzypisane (${open})</label>
+        </div>` : ''}
       <div class="ksefad-scroll">
         ${[...byAccount.entries()].map(([key, list]) => {
           const [account, currency] = key.split('|');
@@ -143,13 +156,18 @@ export function renderBankPage(el, deps) {
             </tbody>
           </table>`;
         }).join('')
-        || `<p class="ksefad-muted" style="padding:14px">Brak operacji w tym okresie. Wgraj pliki PDF z wyciągami (iPKO Biznes) — trafią do miesięcy wynikających z dat operacji${months.length ? `; zapisane miesiące: ${months.join(', ')}` : ''}.</p>`}
+        || `<p class="ksefad-muted" style="padding:14px">${txs.length
+          ? 'Wszystkie operacje odfiltrowane — zaznacz któryś z checkboxów powyżej.'
+          : `Brak operacji w tym okresie. Wgraj pliki PDF z wyciągami (iPKO Biznes) — trafią do miesięcy wynikających z dat operacji${months.length ? `; zapisane miesiące: ${months.join(', ')}` : ''}.`}</p>`}
       </div>
       <div class="ksefad-muted">[/]: miesiąc · klik w wiersz: szczegóły operacji</div>
     </div>`;
 
   const rerender = () => renderBankPage(el, deps);
   bindPeriodBar(el, bankView, rerender);
+  el.querySelectorAll('[data-show]').forEach((cb) => {
+    cb.onchange = () => { bankView.show[cb.dataset.show] = cb.checked; rerender(); };
+  });
   el.querySelector('#bankCompany')?.addEventListener('change', (e) => { bankView.companyId = e.target.value; rerender(); });
   el.querySelector('#bankUpload').onclick = () => el.querySelector('#bankFiles').click();
   el.querySelector('#bankFiles').onchange = (e) => ingestFiles(el, deps, company, e.target.files);
