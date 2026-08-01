@@ -93,7 +93,9 @@ export default async function activate(cl) {
   cl.registerAgentTool('send_invoice', async (args) => {
     const inv = store.getInvoice(args.id);
     if (!inv) throw new Error(`invoice ${args.id} not found`);
-    const updated = await sendToKsef(deps, store.company(inv.companyId), args.id);
+    const company = store.company(inv.companyId);
+    if (!company) throw new Error(`the company of invoice ${args.id} is no longer configured`);
+    const updated = await sendToKsef(deps, company, args.id);
     if (pageEl) renderPage(pageEl, deps);
     return { invoice: updated };
   });

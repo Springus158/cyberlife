@@ -252,7 +252,7 @@ export class KsefClient {
       if (st.status?.code >= 400) {
         // 440 = duplicate: this exact document is already filed, and the
         // status carries its number — that is a success for our record
-        const original = st.status?.extensions?.originalKsefNumber || st.extensions?.originalKsefNumber;
+        const original = st.status.extensions?.originalKsefNumber;
         if (st.status.code === 440 && original) return original;
         const err = new Error(`KSeF rejected the invoice: ${st.status.description || st.status.code}`);
         err.ksefRejected = true;

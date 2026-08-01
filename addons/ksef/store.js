@@ -126,17 +126,21 @@ export function createStore(cl) {
   // approaches the host's 64KB cap
   async function writeChunk(prefix, list) {
     list.sort((a, b) => String(b.issueDate).localeCompare(String(a.issueDate)));
+    // Sizes are exact and incremental: JSON.stringify of an array is
+    // '[' + records joined by ',' + ']', and the cap is UTF-8 bytes (the
+    // host's limit — Polish diacritics take two per character)
     const parts = [];
     let current = [];
+    let currentBytes = 2;
     for (const rec of list) {
-      current.push(rec);
-      // Measured in UTF-8 bytes, not string length — the host cap is bytes,
-      // and Polish diacritics take two of them per character
-      if (utf8.encode(JSON.stringify(current)).length > MAX_CHUNK_BYTES && current.length > 1) {
-        current.pop();
+      const recBytes = utf8.encode(JSON.stringify(rec)).length;
+      if (current.length && currentBytes + recBytes + 1 > MAX_CHUNK_BYTES) {
         parts.push(current);
-        current = [rec];
+        current = [];
+        currentBytes = 2;
       }
+      currentBytes += recBytes + (current.length ? 1 : 0);
+      current.push(rec);
     }
     parts.push(current);
 

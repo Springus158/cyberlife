@@ -13,6 +13,8 @@ const MAX_LOOKBACK_DAYS = 80;
 const KIND_BY_KSEF_TYPE = {
   Vat: 'vat', Zal: 'advance', Kor: 'correction', Roz: 'settlement',
   Upr: 'simplified', KorZal: 'correction', KorRoz: 'correction',
+  VatPef: 'vat', VatPefSp: 'vat', KorPef: 'correction',
+  VatRr: 'vat', KorVatRr: 'correction',
 };
 
 const tokenCache = new Map(); // companyId -> {accessToken, obtainedAt}
@@ -37,10 +39,6 @@ async function accessTokenFor(http, company) {
 export function clearTokenCache(companyId) {
   if (companyId) tokenCache.delete(companyId);
   else tokenCache.clear();
-}
-
-function isoDaysAgo(days) {
-  return new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
 }
 
 // Local date, not UTC: an invoice issued at 00:30 Warsaw time belongs to the
@@ -168,7 +166,9 @@ async function refreshPendingSends({ store, cl }, company, client, accessToken) 
       // expired token) must keep the invoice in 'processing' so the next
       // sync retries the status check
       if (err?.ksefRejected) {
-        await store.updateInvoice(inv.id, { sendState: 'error', sendError: String(err?.message || err) });
+        await store.updateInvoice(inv.id, {
+          sendState: 'error', sendError: String(err?.message || err), sessionRef: '', invoiceRef: '',
+        });
       } else {
         cl?.log?.(`status check for ${inv.number} failed, will retry next sync:`, err);
       }
@@ -181,14 +181,25 @@ export async function checkSendStatus({ http, store }, company, invoiceId) {
   if (!inv?.sessionRef || !inv?.invoiceRef) throw new Error('this invoice has no pending KSeF session');
   const client = new KsefClient({ http, env: company.env || 'prod' });
   const accessToken = await accessTokenFor(http, company);
-  const ksefNumber = await client.waitForKsefNumber({
-    accessToken,
-    sessionReferenceNumber: inv.sessionRef,
-    invoiceReferenceNumber: inv.invoiceRef,
-  }, 1);
-  return ksefNumber
-    ? store.updateInvoice(invoiceId, { ksefNumber, sendState: 'sent' })
-    : inv;
+  try {
+    const ksefNumber = await client.waitForKsefNumber({
+      accessToken,
+      sessionReferenceNumber: inv.sessionRef,
+      invoiceReferenceNumber: inv.invoiceRef,
+    }, 1);
+    return ksefNumber
+      ? store.updateInvoice(invoiceId, { ksefNumber, sendState: 'sent' })
+      : inv;
+  } catch (err) {
+    // Persist the verdict so the invoice stops looking in-flight; the
+    // rethrow still surfaces the rejection message to the caller
+    if (err?.ksefRejected) {
+      await store.updateInvoice(invoiceId, {
+        sendState: 'error', sendError: String(err?.message || err), sessionRef: '', invoiceRef: '',
+      });
+    }
+    throw err;
+  }
 }
 
 export async function downloadXml({ http }, company, ksefNumber) {
@@ -317,11 +328,18 @@ export async function sendToKsef({ http, store }, company, invoiceId) {
       : store.getInvoice(invoiceId);
   } catch (err) {
     const message = String(err?.message || err);
+    // A rejection (schema, decryption) means the document was NOT filed —
+    // that is an 'error' the user can fix and re-send; only an unknown
+    // failure after submission has to stay 'processing' for a status check
+    const inFlight = sent && !err?.ksefRejected;
     await store.updateInvoice(invoiceId, {
-      sendState: sent ? 'processing' : 'error',
+      sendState: inFlight ? 'processing' : 'error',
       sendError: message,
+      // A dead session must not keep blocking the "Send to KSeF" button —
+      // the rejected document was never filed, so a re-send is legitimate
+      ...(err?.ksefRejected ? { sessionRef: '', invoiceRef: '' } : {}),
     });
-    throw sent
+    throw inFlight
       ? new Error(`${message} — the invoice reached KSeF; use "Check KSeF status" rather than re-sending`)
       : err;
   }
