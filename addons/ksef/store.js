@@ -63,7 +63,7 @@ export function createStore(cl) {
     for (const key of Object.keys(cache)) {
       if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`) || key.startsWith(`bank:${id}:`)
         || key.startsWith(`files:${id}`)
-        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}`) {
+        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}` || key === `fvsync:${id}`) {
         await drop(key);
       }
     }
@@ -405,6 +405,14 @@ export function createStore(cl) {
 
   // ---- Fakturownia account snapshot (read-only display) ----
 
+  function fvSyncState(companyId) {
+    return cache[`fvsync:${companyId}`] || null;
+  }
+
+  async function setFvSyncState(companyId, state) {
+    await put(`fvsync:${companyId}`, state);
+  }
+
   function fvInfo(companyId) {
     return cache[`fvinfo:${companyId}`] || null;
   }
@@ -442,5 +450,7 @@ export function createStore(cl) {
     fileByInvoice,
     clientAccounts,
     saveClientAccounts,
+    fvSyncState,
+    setFvSyncState,
   };
 }

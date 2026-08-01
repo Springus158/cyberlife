@@ -10,6 +10,7 @@ import {
 } from './page.js';
 import { renderBankPage, bankOnKey } from './bank-page.js';
 import { renderFilesPage, filesOnKey } from './files-page.js';
+import { renderFvPage, fvOnKey } from './fv-page.js';
 import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid } from './service.js';
 import { importFromFakturownia, fakturowniaMode, fvUpdateClientBankAccount } from './fakturownia.js';
 import { parseStatement, matchTransactions, categorize } from './bank.js';
@@ -24,6 +25,7 @@ export default async function activate(cl) {
   let clientsEl = null;
   let bankEl = null;
   let filesEl = null;
+  let fvEl = null;
   let companyBarEl = null;
 
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -33,6 +35,7 @@ export default async function activate(cl) {
     if (clientsEl) renderClientsPage(clientsEl, deps);
     if (bankEl) renderBankPage(bankEl, deps);
     if (filesEl) renderFilesPage(filesEl, deps);
+    if (fvEl) renderFvPage(fvEl, deps);
   };
 
   // The company picker is anchored in the module page bar and scopes every
@@ -120,6 +123,22 @@ export default async function activate(cl) {
           return filesEl ? filesOnKey(e, filesEl, deps) : false;
         },
         onShow: () => updateCompanyBar(),
+      },
+      {
+        id: 'fv',
+        label: 'Fakturownia',
+        icon: '🔄',
+        render(el) {
+          fvEl = el;
+          renderFvPage(el, deps);
+        },
+        onKey(e) {
+          return fvEl ? fvOnKey(e, fvEl, deps) : false;
+        },
+        onShow: () => {
+          updateCompanyBar();
+          if (fvEl) renderFvPage(fvEl, deps);
+        },
       },
     ],
   });
@@ -544,6 +563,7 @@ export default async function activate(cl) {
     clientsEl = null;
     bankEl = null;
     filesEl = null;
+    fvEl = null;
     companyBarEl = null;
   };
 }

@@ -137,7 +137,7 @@ export async function fvGovStatus({ http }, company, fvId) {
 
 // Read-only mirror of the Fakturownia client book (dual mode); the local
 // contractors store plays this role when Fakturownia is off
-export async function fetchFakturowniaClients(deps, company, onProgress) {
+export async function fetchFakturowniaClients(deps, company, onProgress, { accountsOnly = false } = {}) {
   const { http, store } = deps;
   const out = [];
   for (let page = 1; page <= 200; page++) {
@@ -159,7 +159,7 @@ export async function fetchFakturowniaClients(deps, company, onProgress) {
     }
     onProgress?.({ page, total: out.length });
   }
-  await store.saveClients(company.id, out);
+  if (!accountsOnly) await store.saveClients(company.id, out);
 
   // Accounts kept in Fakturownia flow into the local register (without
   // overwriting locally-added numbers), so statement matching sees them
@@ -313,7 +313,7 @@ function mapInvoice(f, company) {
   };
 }
 
-export async function importFromFakturownia({ http, store }, company, onProgress, { period = 'all' } = {}) {
+export async function importFromFakturownia({ http, store }, company, onProgress, { period = 'all', income = 'both' } = {}) {
   const fk = company.fakturownia || {};
   if (!fk.subdomain || !fk.token) {
     throw new Error(`company "${company.name}": set the Fakturownia subdomain and API token first`);
@@ -364,10 +364,10 @@ export async function importFromFakturownia({ http, store }, company, onProgress
 
   // Two passes: /invoices.json returns income (sales) invoices only, and
   // needs income=no for the cost side
-  await walkPages('');
-  await walkPages('&income=no');
+  if (income !== 'cost') await walkPages('');
+  if (income !== 'sale') await walkPages('&income=no');
 
-  if (period === 'all') {
+  if (period === 'all' && income === 'both') {
     await store.setSyncState(company.id, { fakturowniaImportedAt: new Date().toISOString() });
     await fetchFakturowniaInfo({ http, store }, company)
       .catch((err) => console.warn('[addon:ksef] fakturownia account info fetch failed:', err));

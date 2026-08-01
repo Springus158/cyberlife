@@ -1282,7 +1282,7 @@ function companyFormHtml(c = {}) {
     </div>`;
 }
 
-function fvInfoHtml(info) {
+export function fvInfoHtml(info) {
   if (!info) {
     return '<span class="adk-muted">Parametry konta nie zostały jeszcze pobrane — kliknij „Odśwież" albo uruchom import.</span>';
   }

@@ -28,7 +28,8 @@
         { "id": "invoices", "label": "Faktury", "icon": "🧾" },
         { "id": "clients", "label": "Klienci", "icon": "👥" },
         { "id": "bank", "label": "Wyciągi", "icon": "🏦" },
-        { "id": "files", "label": "Pliki", "icon": "📄" }
+        { "id": "files", "label": "Pliki", "icon": "📄" },
+        { "id": "fv", "label": "Fakturownia", "icon": "🔄" }
       ]
     }
   ],
