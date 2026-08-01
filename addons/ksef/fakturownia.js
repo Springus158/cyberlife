@@ -216,6 +216,17 @@ function mapInvoice(f, company) {
     paidAmount: Number(f.paid) || 0,
     paidDate: f.paid_date || '',
     kind: f.kind || 'vat',
+    // Positions say what the document was issued FOR — kept slim; tax can
+    // be a rate or 'zw'/'np', so it stays as-is for display
+    ...(Array.isArray(f.positions) && f.positions.length ? {
+      lines: f.positions.map((p) => ({
+        name: p.name || '',
+        quantity: Number(p.quantity) || 1,
+        unit: p.quantity_unit || 'szt',
+        unitNetPrice: Number(p.price_net) || 0,
+        vatRate: Number.isFinite(Number(p.tax)) ? Number(p.tax) : String(p.tax ?? ''),
+      })),
+    } : {}),
   };
 }
 
@@ -231,7 +242,7 @@ export async function importFromFakturownia({ http, store }, company, onProgress
     let page = 1;
     for (; page <= MAX_PAGES; page++) {
       const res = await http({
-        url: `${base}/invoices.json?period=${period}&page=${page}&per_page=${PER_PAGE}${extraQuery}&api_token=${encodeURIComponent(fk.token)}`,
+        url: `${base}/invoices.json?period=${period}&page=${page}&per_page=${PER_PAGE}&include_positions=true${extraQuery}&api_token=${encodeURIComponent(fk.token)}`,
       });
       if (res.status === 401 || res.status === 403) {
         throw new Error(`Fakturownia rejected the token (${res.status}) — check subdomain and api_token`);

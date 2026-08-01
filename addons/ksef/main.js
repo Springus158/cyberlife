@@ -79,7 +79,13 @@ export default async function activate(cl) {
       query: args.query,
       limit: args.limit || 50,
     });
-    return { count: invoices.length, invoices: invoices.map(({ lines, ...rest }) => rest) };
+    return {
+      count: invoices.length,
+      invoices: invoices.map(({ lines, ...rest }) => ({
+        ...rest,
+        description: lines?.length ? lines.map((l) => l.name).join('; ').slice(0, 200) : '',
+      })),
+    };
   });
 
   cl.registerAgentTool('create_invoice', async (args) => {

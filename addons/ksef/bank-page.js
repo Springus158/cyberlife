@@ -6,7 +6,7 @@
 import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { setPaid } from './service.js';
 import {
-  injectStyle, currentMonth, monthAdd, monthLabel, periodBarHtml, bindPeriodBar, periodOf, printDocHtml,
+  injectStyle, currentMonth, monthAdd, monthLabel, periodBarHtml, bindPeriodBar, periodOf, printDocHtml, invDesc,
 } from './page.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -304,7 +304,8 @@ function openAssignModal(el, deps, company, tx) {
           <tr data-pick="${esc(inv.id)}">
             <td>${esc(inv.number || inv.ksefNumber || '—')}</td>
             <td>${esc(inv.issueDate)}</td>
-            <td>${esc(dir === 'cost' ? inv.sellerName : inv.buyerName)}</td>
+            <td>${esc(dir === 'cost' ? inv.sellerName : inv.buyerName)}
+              ${inv.lines?.length ? `<div class="ksefad-muted" style="font-size:.9em">${esc(invDesc(inv, 55))}</div>` : ''}</td>
             <td style="text-align:right">${money(inv.gross, inv.currency)}</td>
           </tr>`).join('') || '<tr><td class="ksefad-muted">Brak faktur.</td></tr>'}
       </tbody></table>`;
@@ -347,7 +348,8 @@ function openTxDetail(el, deps, company, tx) {
           <div style="margin-top:6px"><b>Przypisana faktura:</b> ${esc(inv.number || inv.ksefNumber)}
             <span class="adk-muted">(${esc(tx.matchedBy || 'ręcznie')})</span></div>
           <div class="adk-muted">${esc(inv.dir === 'cost' ? inv.sellerName : inv.buyerName)} · ${money(inv.gross, inv.currency)}
-            · ${inv.paid ? 'opłacona' : 'nieopłacona'}${inv.ksefNumber ? ` · KSeF ${esc(inv.ksefNumber)}` : ''}</div>`
+            · ${inv.paid ? 'opłacona' : 'nieopłacona'}${inv.ksefNumber ? ` · KSeF ${esc(inv.ksefNumber)}` : ''}</div>
+          ${inv.lines?.length ? `<div class="adk-muted">${esc(invDesc(inv, 90))}</div>` : ''}`
         : `<div style="margin-top:6px"><b>Faktura:</b> <span class="ksefad-no">brak przypisania</span>
             ${tx.category ? `· kategoria: <b>${esc(tx.category)}</b>` : ''}</div>`}
       </div>

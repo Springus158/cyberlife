@@ -13,6 +13,19 @@ import { normalizeNip } from './store.js';
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const zl = (n, cur = 'PLN') => `${(Number(n) || 0).toFixed(2)} ${cur}`;
 
+// VAT can be 'zw'/'np' on imported positions — money math then yields 0
+function safeLineVat(l) {
+  return Number.isFinite(Number(l.vatRate)) ? lineVat(l) : 0;
+}
+
+// One-line "what was this issued for", from the document's positions
+export function invDesc(inv, max = 70) {
+  if (!inv?.lines?.length) return '';
+  const first = inv.lines[0].name || '';
+  const extra = inv.lines.length > 1 ? ` (+${inv.lines.length - 1})` : '';
+  return (first.length > max ? `${first.slice(0, max)}…` : first) + extra;
+}
+
 function ksefMark(inv) {
   if (inv.ksefNumber) return `<span class="ksefad-ok" title="${esc(inv.ksefNumber)}">✓</span>`;
   if (inv.kind === 'proforma') return '<span class="ksefad-muted">—</span>';
@@ -334,7 +347,8 @@ export function renderPage(el, deps) {
               <tr data-id="${esc(inv.id)}" class="${i === view.selected ? 'sel' : ''}">
                 <td>${esc(inv.number || '—')}</td>
                 <td>${esc(inv.issueDate)}</td>
-                <td>${esc(inv.dir === 'sale' ? inv.buyerName : inv.sellerName)}</td>
+                <td>${esc(inv.dir === 'sale' ? inv.buyerName : inv.sellerName)}
+                  ${inv.lines?.length ? `<div class="ksefad-muted" style="font-size:.9em">${esc(invDesc(inv))}</div>` : ''}</td>
                 <td style="text-align:right">${zl(inv.gross, inv.currency)}</td>
                 <td>${payBadge(inv)}</td>
                 <td style="text-align:center">${ksefMark(inv)}</td>
@@ -413,7 +427,8 @@ function clientInvoiceTableHtml(list) {
       <thead><tr><th>Numer</th><th>Data</th><th>Brutto</th><th>Status</th><th>KSeF</th></tr></thead>
       <tbody>${list.map((i) => `
         <tr data-inv-id="${esc(i.id)}">
-          <td>${esc(i.number || '—')}</td>
+          <td>${esc(i.number || '—')}
+            ${i.lines?.length ? `<div class="ksefad-muted" style="font-size:.9em">${esc(invDesc(i, 50))}</div>` : ''}</td>
           <td>${esc(i.issueDate)}</td>
           <td style="text-align:right">${zl(i.gross, i.currency)}</td>
           <td>${payBadge(i)}</td>
@@ -649,8 +664,8 @@ function openDetail(el, deps, id) {
             <td style="text-align:right">${Number(l.unitNetPrice).toFixed(2)}</td>
             <td style="text-align:right">${lineNet(l).toFixed(2)}</td>
             <td style="text-align:right">${esc(l.vatRate)}</td>
-            <td style="text-align:right">${lineVat(l).toFixed(2)}</td>
-            <td style="text-align:right">${(lineNet(l) + lineVat(l)).toFixed(2)}</td>
+            <td style="text-align:right">${safeLineVat(l).toFixed(2)}</td>
+            <td style="text-align:right">${(lineNet(l) + safeLineVat(l)).toFixed(2)}</td>
           </tr>`).join('')}
           </tbody>
         </table>` : ''}
