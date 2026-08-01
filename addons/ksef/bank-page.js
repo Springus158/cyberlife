@@ -23,10 +23,13 @@ const bankView = {
   busy: '',
   error: '',
   info: '',
-  show: { ok: true, warn: true, bad: true },
+  show: { ok: true, warn: true, bad: true, in: true },
 };
 
+// Incoming operations (uznania) are their own visual bucket; the
+// settlement column still shows whether they were paired with a sale
 function txState(tx) {
+  if (tx.amount > 0) return 'in';
   if (tx.invoiceId) return 'ok';
   return (tx.category || categorize(tx)) ? 'warn' : 'bad';
 }
@@ -96,9 +99,9 @@ export function renderBankPage(el, deps) {
     if (!byAccount.has(key)) byAccount.set(key, []);
     byAccount.get(key).push(tx);
   }
-  const matched = txs.filter((t) => txState(t) === 'ok').length;
-  const categorized = txs.filter((t) => txState(t) === 'warn').length;
-  const open = txs.length - matched - categorized;
+  const counts = { ok: 0, warn: 0, bad: 0, in: 0 };
+  for (const t of txs) counts[txState(t)]++;
+  const { ok: matched, warn: categorized, bad: open, in: incoming } = counts;
   const months = company ? store.bankMonths(company.id) : [];
 
   el.innerHTML = `
@@ -126,6 +129,7 @@ export function renderBankPage(el, deps) {
           <label style="color:var(--success, #a6e3a1)"><input type="checkbox" data-show="ok" ${bankView.show.ok ? 'checked' : ''}> przypisane (${matched})</label>
           <label style="color:var(--warning, #f9e2af)"><input type="checkbox" data-show="warn" ${bankView.show.warn ? 'checked' : ''}> opłaty / kategorie (${categorized})</label>
           <label style="color:var(--error, #f38ba8)"><input type="checkbox" data-show="bad" ${bankView.show.bad ? 'checked' : ''}> nieprzypisane (${open})</label>
+          <label style="color:#94e2d5"><input type="checkbox" data-show="in" ${bankView.show.in ? 'checked' : ''}> uznania (${incoming})</label>
         </div>` : ''}
       <div class="ksefad-scroll">
         ${[...byAccount.entries()].map(([key, list]) => {
@@ -136,7 +140,7 @@ export function renderBankPage(el, deps) {
             <thead><tr><th>Data</th><th>Typ</th><th>Opis</th><th style="text-align:right">Kwota</th><th>Faktura / kategoria</th></tr></thead>
             <tbody>
               ${list.map((tx) => `
-                <tr data-tx="${esc(tx.id)}" class="${tx.invoiceId ? 'ksefad-row-ok' : (tx.category || categorize(tx)) ? 'ksefad-row-warn' : 'ksefad-row-bad'}">
+                <tr data-tx="${esc(tx.id)}" class="ksefad-row-${txState(tx)}">
                   <td style="white-space:nowrap">${esc(tx.date)}</td>
                   <td>${esc(tx.type)}</td>
                   <td title="${esc(tx.desc)}">${esc(tx.desc.length > 80 ? `${tx.desc.slice(0, 80)}…` : tx.desc)}</td>
