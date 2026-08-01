@@ -298,7 +298,42 @@ export function matchTransactions(txs, invoices) {
       return { ...tx, invoiceId: near[0].id, matchedBy: 'kwota + data (do weryfikacji)', auto: true };
     }
 
+    // Cross-currency: a card charge lands in the account currency while the
+    // invoice is billed in another (Hetzner EUR invoice → PLN debit). Same
+    // counterparty + the amount ratio inside a plausible FX band + a close
+    // date, and only when the candidate is unique.
+    const fx = invoices.filter((inv) => inv.dir === wantDir && !used.has(inv.id)
+      && inv.currency && inv.currency !== (tx.currency || 'PLN')
+      && inv.issueDate && Math.abs(Date.parse(inv.issueDate) - Date.parse(tx.date)) <= 21 * 86400e3
+      && fxPlausible(Math.abs(tx.amount), tx.currency || 'PLN', inv.gross, inv.currency)
+      && counterpartyMatches(tx, inv, wantDir, descAscii));
+    if (fx.length === 1) {
+      used.add(fx[0].id);
+      return { ...tx, invoiceId: fx[0].id, matchedBy: `kwota ${fx[0].currency}→${tx.currency || 'PLN'} (do weryfikacji)`, auto: true };
+    }
+
     const category = categorize(tx);
     return category ? { ...tx, category, auto: true } : tx;
   });
+}
+
+// Plausible PLN value per unit across 2021-2026 — wide on purpose; the
+// counterparty-name requirement carries the precision
+const FX_PLN_BAND = { PLN: [1, 1], EUR: [4.0, 5.0], USD: [3.4, 4.6], GBP: [4.6, 5.8], CHF: [4.0, 5.2] };
+
+function fxPlausible(txAmount, txCur, invGross, invCur) {
+  const from = FX_PLN_BAND[invCur];
+  const to = FX_PLN_BAND[txCur];
+  if (!from || !to || !(invGross > 0) || !(txAmount > 0)) return false;
+  const ratio = txAmount / invGross;
+  return ratio >= from[0] / to[1] && ratio <= from[1] / to[0];
+}
+
+function counterpartyMatches(tx, inv, wantDir, descAscii) {
+  const otherNip = wantDir === 'cost' ? inv.sellerNip : inv.buyerNip;
+  if (otherNip && normalizeNip(tx.desc).includes(otherNip)) return true;
+  const other = ascii(wantDir === 'cost' ? inv.sellerName : inv.buyerName);
+  const words = other.split(/[^A-Z0-9]+/).filter((w) => w.length >= 5);
+  if (words.some((w) => descAscii.includes(w))) return true;
+  return NAME_ALIASES.some(([mark, who]) => descAscii.includes(mark) && other.replace(/[^A-Z0-9]/g, '').includes(who));
 }
