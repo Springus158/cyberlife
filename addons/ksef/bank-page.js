@@ -44,7 +44,10 @@ function txsForView(store, company) {
   return months
     .flatMap((m) => store.bankMonth(company.id, m))
     .filter((t) => (!period.from || t.date >= period.from) && (!period.to || t.date <= period.to))
+    // seq preserves statement order but restarts every month, so it only
+    // orders WITHIN a month — across months the month goes first
     .sort((a, b) => a.account.localeCompare(b.account)
+      || a.date.slice(0, 7).localeCompare(b.date.slice(0, 7))
       || (a.seq ?? Number.MAX_SAFE_INTEGER) - (b.seq ?? Number.MAX_SAFE_INTEGER)
       || a.date.localeCompare(b.date));
 }
@@ -103,8 +106,14 @@ export function renderBankPage(el, deps) {
     t.invoiceId ? invoiceLabel(store, t.invoiceId) : '',
   ].some((v) => String(v || '').toLowerCase().includes(q));
   const shown = txs.filter((t) => bankView.show[txState(t)] && matchesQuery(t));
+  // No paging on purpose (desktop app, a few thousand rows render fine) —
+  // the cap only guards against an unbounded future archive
+  const RENDER_CAP = 2500;
+  let budget = RENDER_CAP;
   const byAccount = new Map();
   for (const tx of shown) {
+    if (budget <= 0) break;
+    budget--;
     const key = `${tx.account}|${tx.currency}`;
     if (!byAccount.has(key)) byAccount.set(key, []);
     byAccount.get(key).push(tx);
@@ -118,7 +127,8 @@ export function renderBankPage(el, deps) {
     <div class="ksefad">
       <div class="ksefad-bar">
         <h2 style="margin:0; font-size:17px">🏦 Wyciągi bankowe</h2>
-        ${periodBarHtml(bankView)}
+        ${bankView.mode === 'all' ? '' : periodBarHtml(bankView)}
+        <label class="ksefad-muted" style="white-space:nowrap"><input type="checkbox" id="bankAllTime" ${bankView.mode === 'all' ? 'checked' : ''}> wszystko</label>
         <input id="bankQuery" placeholder="szukaj… (/)" value="${esc(bankView.query)}" style="flex:1; min-width:110px">
         <input type="file" id="bankFiles" multiple accept=".pdf" style="display:none">
         <button class="ksefad-btn primary" id="bankUpload" ${bankView.busy ? 'disabled' : ''}>${bankView.busy === 'parse' ? 'Analizuję…' : '+ Wgraj wyciągi (PDF)'}</button>
@@ -132,7 +142,7 @@ export function renderBankPage(el, deps) {
       ${bankView.info ? `<div class="ksefad-muted">${esc(bankView.info)}</div>` : ''}
       ${txs.length ? `
         <div class="ksefad-bar ksefad-muted" style="gap:16px">
-          <span>${txs.length} operacji, pokazuję ${shown.length}:</span>
+          <span>${txs.length} operacji, pokazuję ${Math.min(shown.length, RENDER_CAP)}${shown.length > RENDER_CAP ? ` z ${shown.length} — zawęź szukajką` : ''}:</span>
           <label style="color:var(--success, #a6e3a1)"><input type="checkbox" data-show="ok" ${bankView.show.ok ? 'checked' : ''}> przypisane (${matched})</label>
           <label style="color:var(--warning, #f9e2af)"><input type="checkbox" data-show="warn" ${bankView.show.warn ? 'checked' : ''}> opłaty / kategorie (${categorized})</label>
           <label style="color:var(--error, #f38ba8)"><input type="checkbox" data-show="bad" ${bankView.show.bad ? 'checked' : ''}> nieprzypisane (${open})</label>
@@ -179,6 +189,15 @@ export function renderBankPage(el, deps) {
   el.querySelectorAll('[data-show]').forEach((cb) => {
     cb.onchange = () => { bankView.show[cb.dataset.show] = cb.checked; rerender(); };
   });
+  el.querySelector('#bankAllTime').onchange = (e) => {
+    if (e.target.checked) {
+      bankView.prevMode = bankView.mode;
+      bankView.mode = 'all';
+    } else {
+      bankView.mode = bankView.prevMode === 'all' ? 'month' : (bankView.prevMode || 'month');
+    }
+    rerender();
+  };
   const query = el.querySelector('#bankQuery');
   // Re-rendering replaces the input the user is typing into, so focus and
   // caret have to be put back or only the first keystroke ever lands
@@ -221,7 +240,9 @@ export function renderBankPage(el, deps) {
     rerender();
   });
   el.querySelector('#bankReport')?.addEventListener('click', () => printReport(deps, company,
-    bankView.mode === 'month' ? monthLabel(bankView.month) : `${bankView.from} — ${bankView.to}`, txs));
+    bankView.mode === 'month' ? monthLabel(bankView.month)
+      : bankView.mode === 'all' ? 'cała historia'
+        : `${bankView.from} — ${bankView.to}`, txs));
   el.querySelectorAll('[data-tx]').forEach((row) => {
     row.onclick = (e) => {
       if (e.target.closest('button, select')) return;

@@ -228,6 +228,7 @@ export function bindPeriodBar(el, state, rerender) {
 }
 
 export function periodOf(state) {
+  if (state.mode === 'all') return { from: undefined, to: undefined };
   return state.mode === 'range'
     ? { from: state.from || undefined, to: state.to || undefined }
     : monthRange(state.month);
