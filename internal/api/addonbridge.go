@@ -24,6 +24,7 @@ import (
 
 	"github.com/kalor62/cyberlife/internal/addons"
 	"github.com/kalor62/cyberlife/internal/logging"
+	"github.com/kalor62/cyberlife/internal/platform"
 )
 
 // ---- outbound HTTP proxy ----
@@ -238,6 +239,58 @@ func (s *Server) handleAddonPdfText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"text": string(out)})
+}
+
+// ---- HTML preview (print path) ----
+
+const maxPreviewBytes = 2 << 20
+
+type addonPreviewRequest struct {
+	Addon string `json:"addon"`
+	HTML  string `json:"html"`
+	Title string `json:"title,omitempty"`
+}
+
+// handleAddonPreview writes a self-contained HTML document to a temp file
+// and opens it in the default browser. WKWebView does not implement
+// window.print(), so this is how addon print views (invoices, reports)
+// reach paper or PDF.
+func (s *Server) handleAddonPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("POST only"))
+		return
+	}
+	var req addonPreviewRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	addon, ok := addons.Get(req.Addon, s.manager.GetAddonsEnabled())
+	if !ok || !addon.Enabled {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("addon %q is not enabled", req.Addon))
+		return
+	}
+	if req.HTML == "" || len(req.HTML) > maxPreviewBytes {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("html must be 1 byte to %d MB", maxPreviewBytes>>20))
+		return
+	}
+	tmp, err := os.CreateTemp("", "addon-preview-*.html")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := tmp.WriteString(req.HTML); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		logging.Debug("addon preview close failed", "error", err)
+	}
+	if err := platform.OpenExternal(tmp.Name()); err != nil {
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("could not open the preview: %w", err))
+		return
+	}
+	logging.Info("addon preview opened", "addon", req.Addon, "title", req.Title, "file", tmp.Name())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // ---- agent tool bridge ----

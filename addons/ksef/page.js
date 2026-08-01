@@ -606,7 +606,7 @@ function openDetail(el, deps, id) {
     }
     renderPage(el, deps);
   });
-  overlay.querySelector('#ksefadPrint')?.addEventListener('click', () => printInvoice(company, store.getInvoice(id)));
+  overlay.querySelector('#ksefadPrint')?.addEventListener('click', () => printInvoice(deps, company, store.getInvoice(id)));
   overlay.querySelector('#ksefadCheck')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
     e.target.textContent = 'Sprawdzanie…';
@@ -809,10 +809,7 @@ function openCreateForm(el, deps) {
 
 // ---- print (Fakturownia-style classic template) ----
 
-export function printInvoice(company, inv) {
-  document.getElementById('ksefad-print')?.remove();
-  const root = document.createElement('div');
-  root.id = 'ksefad-print';
+export function printInvoice(deps, company, inv) {
   const lines = inv.lines || [];
   const vatGroups = {};
   for (const l of lines) {
@@ -821,7 +818,7 @@ export function printInvoice(company, inv) {
     g.vat += lineVat(l);
     vatGroups[l.vatRate] = g;
   }
-  root.innerHTML = `
+  const body = `
     <div style="font-family: Arial, Helvetica, sans-serif; font-size:12px; padding:24px; max-width:760px; margin:0 auto;">
       <table style="width:100%; margin-bottom:18px"><tr>
         <td style="vertical-align:top">
@@ -880,9 +877,17 @@ export function printInvoice(company, inv) {
       ${inv.paymentTo ? `<div>Termin płatności: ${esc(inv.paymentTo)}</div>` : ''}
       ${company?.bankAccount ? `<div>Nr konta: ${esc(company.bankAccount)}</div>` : ''}
     </div>`;
-  document.body.appendChild(root);
-  window.print();
-  setTimeout(() => root.remove(), 500);
+  // WKWebView has no window.print(); the document opens in the default
+  // browser, prints itself and can be saved as PDF there
+  const title = `${inv.kind === 'proforma' ? 'Proforma' : 'Faktura'} ${inv.number}`;
+  deps.cl.openPreview(
+    `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>${esc(title)}</title></head>`
+    + `<body onload="window.print()">${body}</body></html>`,
+    title,
+  ).catch((err) => {
+    deps.cl.log('print preview failed:', err);
+    alert(`Nie udało się otworzyć podglądu wydruku: ${err.message || err}`);
+  });
 }
 
 // ---- keyboard ----

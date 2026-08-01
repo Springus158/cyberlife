@@ -147,6 +147,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/addons/storage/delete", groupPost[addonsRequest](s, "addons", s.opAddonsStorageDelete))
 	mux.HandleFunc("/api/addons/http", s.handleAddonHTTP)
 	mux.HandleFunc("/api/addons/pdftext", s.handleAddonPdfText)
+	mux.HandleFunc("/api/addons/preview", s.handleAddonPreview)
 	mux.HandleFunc("/api/addons/tool-result", s.handleAddonToolResult)
 	mux.HandleFunc("/api/mail/image", s.handleMailImage)
 	mux.HandleFunc("/addons/", s.handleAddonAsset)

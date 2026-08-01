@@ -251,6 +251,19 @@ function makeContext(addon, inst) {
       return (await res.json()).text;
     },
 
+    // Opens a self-contained HTML document in the default browser — the
+    // print/PDF path, since WKWebView does not implement window.print()
+    async openPreview(html, title) {
+      const res = await fetch(`${API_BASE}/api/addons/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addon: addon.id, html, title }),
+      });
+      if (!res.ok) {
+        throw new Error(`preview: ${res.status} ${await res.text()}`);
+      }
+    },
+
     registerAgentTool(name, handler) {
       if (typeof handler !== 'function') {
         throw new Error('registerAgentTool needs (name, async handler(args))');

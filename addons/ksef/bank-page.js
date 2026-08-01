@@ -85,7 +85,7 @@ export function renderBankPage(el, deps) {
             <thead><tr><th>Data</th><th>Typ</th><th>Opis</th><th style="text-align:right">Kwota</th><th>Faktura / kategoria</th></tr></thead>
             <tbody>
               ${list.map((tx) => `
-                <tr>
+                <tr data-tx="${esc(tx.id)}">
                   <td style="white-space:nowrap">${esc(tx.date)}</td>
                   <td>${esc(tx.type)}</td>
                   <td title="${esc(tx.desc)}">${esc(tx.desc.length > 80 ? `${tx.desc.slice(0, 80)}…` : tx.desc)}</td>
@@ -139,7 +139,13 @@ export function renderBankPage(el, deps) {
     bankView.info = `Oznaczono ${n} faktur kosztowych jako zapłacone.`;
     rerender();
   });
-  el.querySelector('#bankReport')?.addEventListener('click', () => printReport(store, company, bankView.month, txs));
+  el.querySelector('#bankReport')?.addEventListener('click', () => printReport(deps, company, bankView.month, txs));
+  el.querySelectorAll('[data-tx]').forEach((row) => {
+    row.onclick = (e) => {
+      if (e.target.closest('button, select')) return;
+      openTxDetail(el, deps, company, txs.find((t) => t.id === row.dataset.tx));
+    };
+  });
   el.querySelectorAll('[data-assign]').forEach((btn) => {
     btn.onclick = () => openAssignModal(el, deps, company, txs.find((t) => t.id === btn.dataset.assign));
   });
@@ -257,10 +263,62 @@ function openAssignModal(el, deps, company, tx) {
   overlay.querySelector('#bankAssignQuery').focus();
 }
 
-function printReport(store, company, month, txs) {
-  document.getElementById('ksefad-print')?.remove();
-  const root = document.createElement('div');
-  root.id = 'ksefad-print';
+// Full-detail popup for one statement operation, with the assignment
+// actions available from the row inline controls too
+function openTxDetail(el, deps, company, tx) {
+  if (!tx) return;
+  const { store } = deps;
+  const inv = tx.invoiceId ? store.getInvoice(tx.invoiceId) : null;
+  const overlay = document.createElement('div');
+  overlay.className = 'ksefad-overlay modal-overlay';
+  overlay.innerHTML = `
+    <div class="ksefad-modal lg" style="width:min(720px, 92vw)">
+      <div class="ksefad-doc-head">
+        <h2>${esc(tx.type)}</h2>
+        <div class="ksefad-doc-dates">
+          <div><span>Data operacji</span><b>${esc(tx.date)}</b></div>
+          <div><span>Kwota</span><b style="color:${tx.amount < 0 ? 'var(--error, #f38ba8)' : 'var(--success, #a6e3a1)'}">${money(tx.amount, tx.currency)}</b></div>
+        </div>
+      </div>
+      <div class="adk-kv" style="margin-bottom:14px">
+        <div><b>Rachunek:</b> ${esc(fmtAccount(tx.account))} (${esc(tx.currency)}) · ${esc(tx.bank || '')}</div>
+        <div><b>Identyfikator operacji:</b> ${esc(tx.id)}</div>
+        <div><b>Pełny opis:</b></div>
+        <div style="white-space:pre-wrap; background:var(--bg-surface, #313244); border-radius:8px; padding:10px 12px">${esc(tx.desc)}</div>
+        ${inv ? `
+          <div style="margin-top:6px"><b>Przypisana faktura:</b> ${esc(inv.number || inv.ksefNumber)}
+            <span class="adk-muted">(${esc(tx.matchedBy || 'ręcznie')})</span></div>
+          <div class="adk-muted">${esc(inv.dir === 'cost' ? inv.sellerName : inv.buyerName)} · ${money(inv.gross, inv.currency)}
+            · ${inv.paid ? 'opłacona' : 'nieopłacona'}${inv.ksefNumber ? ` · KSeF ${esc(inv.ksefNumber)}` : ''}</div>`
+        : `<div style="margin-top:6px"><b>Faktura:</b> <span class="ksefad-no">brak przypisania</span>
+            ${tx.category ? `· kategoria: <b>${esc(tx.category)}</b>` : ''}</div>`}
+      </div>
+      <div class="adk-actions">
+        ${inv ? `<button class="adk-btn" id="txUnassign">Odepnij fakturę</button>`
+          : `<button class="adk-btn primary" id="txAssign">Przypisz fakturę</button>`}
+        <span style="flex:1"></span>
+        <button class="adk-btn" id="txClose">Zamknij (Esc)</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('#txClose').onclick = close;
+  overlay.querySelector('#txAssign')?.addEventListener('click', () => {
+    close();
+    openAssignModal(el, deps, company, tx);
+  });
+  overlay.querySelector('#txUnassign')?.addEventListener('click', async () => {
+    const txsNow = store.bankMonth(company.id, bankView.month);
+    await store.saveBankMonth(company.id, bankView.month,
+      txsNow.map((t) => (t.id === tx.id ? { ...t, invoiceId: '', matchedBy: '', auto: false } : t)));
+    close();
+    renderBankPage(el, deps);
+  });
+}
+
+function printReport(deps, company, month, txs) {
+  const { store } = deps;
   const byAccount = new Map();
   for (const tx of txs) {
     const key = `${tx.account}|${tx.currency}`;
@@ -299,7 +357,7 @@ function printReport(store, company, month, txs) {
           </tr>`).join('')}</tbody>
       </table>` : '<p style="font-size:11px">brak</p>'}`;
   };
-  root.innerHTML = `
+  const body = `
     <div style="font-family: Arial, Helvetica, sans-serif; font-size:12px; padding:24px; max-width:800px; margin:0 auto">
       <h2 style="margin-bottom:2px">Rozliczenie wyciągów bankowych — ${esc(month)}</h2>
       <div style="color:#555; margin-bottom:8px">${esc(company.name)} · NIP ${esc(company.nip)} · wygenerowano ${new Date().toISOString().slice(0, 10)}</div>
@@ -308,7 +366,13 @@ function printReport(store, company, month, txs) {
         return section(account, currency, list);
       }).join('')}
     </div>`;
-  document.body.appendChild(root);
-  window.print();
-  setTimeout(() => root.remove(), 500);
+  const title = `Rozliczenie wyciągów ${month} — ${company.name}`;
+  deps.cl.openPreview(
+    `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>${esc(title)}</title></head>`
+    + `<body onload="window.print()">${body}</body></html>`,
+    title,
+  ).catch((err) => {
+    deps.cl.log('report preview failed:', err);
+    bankView.error = `Nie udało się otworzyć raportu: ${err.message || err}`;
+  });
 }
