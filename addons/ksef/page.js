@@ -50,6 +50,7 @@ export function injectStyle() {
     .ksefad-sync-title::after { display:inline-block; width:1.2em; text-align:left; content:''; animation: ksefad-dots 1.6s steps(1) infinite; }
     .ksefad-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .ksefad-tabs { display:flex; gap:2px; }
+    .ksefad-mnav { display:flex; gap:6px; align-items:center; }
     .ksefad-tab { background:transparent; border:1px solid var(--border, #45475a); color:inherit;
       border-radius:6px 6px 0 0; border-bottom:none; padding:6px 16px; cursor:pointer; font:inherit; opacity:.6; }
     .ksefad-tab.active { opacity:1; border-color:var(--accent, #89b4fa); color:var(--accent, #89b4fa); font-weight:600; }
@@ -130,6 +131,75 @@ export function injectStyle() {
   document.head.appendChild(style);
 }
 
+// ---- month navigation (shared with the bank module) ----
+
+const MONTH_NAMES = ['styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
+  'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
+
+export function currentMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export function monthAdd(month, delta) {
+  const [y, m] = month.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export function monthLabel(month) {
+  const [y, m] = month.split('-').map(Number);
+  return `${MONTH_NAMES[m - 1]} ${y}`;
+}
+
+export function monthRange(month) {
+  const [y, m] = month.split('-').map(Number);
+  return { from: `${month}-01`, to: `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}` };
+}
+
+// Month-first period picker with a date-range fallback; the callbacks fire
+// after the caller-provided view state was updated
+export function periodBarHtml(state) {
+  if (state.mode === 'range') {
+    return `
+      <div class="ksefad-mnav">
+        <input type="date" id="ksefadFrom" value="${state.from || ''}">
+        <span class="ksefad-muted">—</span>
+        <input type="date" id="ksefadTo" value="${state.to || ''}">
+        <button class="ksefad-btn" id="ksefadPeriodMode" title="Przełącz na widok miesiąca">Miesiąc</button>
+      </div>`;
+  }
+  return `
+    <div class="ksefad-mnav">
+      <button class="ksefad-btn" id="ksefadPrevM" title="Poprzedni miesiąc ([)">◀</button>
+      <b style="min-width:130px; text-align:center">${monthLabel(state.month)}</b>
+      <button class="ksefad-btn" id="ksefadNextM" title="Następny miesiąc (])">▶</button>
+      <button class="ksefad-btn" id="ksefadPeriodMode" title="Przełącz na zakres dat">Zakres dat</button>
+    </div>`;
+}
+
+export function bindPeriodBar(el, state, rerender) {
+  el.querySelector('#ksefadPrevM')?.addEventListener('click', () => { state.month = monthAdd(state.month, -1); rerender(); });
+  el.querySelector('#ksefadNextM')?.addEventListener('click', () => { state.month = monthAdd(state.month, 1); rerender(); });
+  el.querySelector('#ksefadPeriodMode')?.addEventListener('click', () => {
+    state.mode = state.mode === 'range' ? 'month' : 'range';
+    if (state.mode === 'range' && !state.from) {
+      const r = monthRange(state.month);
+      state.from = r.from;
+      state.to = r.to;
+    }
+    rerender();
+  });
+  el.querySelector('#ksefadFrom')?.addEventListener('change', (e) => { state.from = e.target.value; rerender(); });
+  el.querySelector('#ksefadTo')?.addEventListener('change', (e) => { state.to = e.target.value; rerender(); });
+}
+
+export function periodOf(state) {
+  return state.mode === 'range'
+    ? { from: state.from || undefined, to: state.to || undefined }
+    : monthRange(state.month);
+}
+
 const view = {
   companyId: '',
   dir: 'sale',
@@ -140,6 +210,10 @@ const view = {
   selected: 0,
   clientIdx: 0,
   clientTab: 'fv',
+  mode: 'month',
+  month: currentMonth(),
+  from: '',
+  to: '',
 };
 
 const TAB_ORDER = ['sale', 'cost', 'clients'];
@@ -213,11 +287,14 @@ export function renderPage(el, deps) {
       </div>`;
     return;
   }
+  const period = periodOf(view);
   const invoices = store.listInvoices({
     companyId: view.companyId || undefined,
     dir: view.dir || undefined,
     unpaid: view.unpaid || undefined,
     query: view.query || undefined,
+    from: period.from,
+    to: period.to,
     limit: 300,
   });
   view.selected = Math.min(view.selected, Math.max(0, invoices.length - 1));
@@ -226,6 +303,7 @@ export function renderPage(el, deps) {
     <div class="ksefad">
       <div class="ksefad-bar">
         ${tabsHtml()}
+        ${periodBarHtml(view)}
         <select id="ksefadCompany">
           <option value="">All companies</option>
           ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === view.companyId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
@@ -253,7 +331,7 @@ export function renderPage(el, deps) {
         </table>
         ${invoices.length ? '' : '<p class="ksefad-muted" style="padding:12px">No invoices match. Run the Fakturownia import (Settings) or Sync KSeF.</p>'}
       </div>
-      <div class="ksefad-muted">${invoices.length} shown · h/l lub Tab: przychody/wydatki · j/k select · Enter open · n new · r sync</div>
+      <div class="ksefad-muted">${invoices.length} pozycji · [/]: miesiąc · h/l lub Tab: zakładki · j/k wybór · Enter otwórz · n nowa · r sync</div>
       ${view.busy === 'sync' ? `
         <div class="ksefad-sync-overlay">
           <svg width="76" height="76" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -268,6 +346,7 @@ export function renderPage(el, deps) {
     </div>`;
 
   bindShellControls(el, deps);
+  bindPeriodBar(el, view, () => renderPage(el, deps));
   el.querySelector('#ksefadUnpaid').onchange = (e) => { view.unpaid = e.target.checked; renderPage(el, deps); };
   el.querySelector('#ksefadSync').onclick = () => runSync(el, deps);
   el.querySelector('#ksefadNew').onclick = () => openCreateForm(el, deps);
@@ -911,6 +990,15 @@ export function pageOnKey(e, el, deps) {
     case 'l': cycleTab(el, deps, 1); return true;
     case 'Tab': e.preventDefault(); cycleTab(el, deps, 1); return true;
     case '/': el.querySelector('#ksefadQuery')?.focus(); e.preventDefault(); return true;
+    case '[':
+    case ']':
+      if (view.dir !== 'clients' && view.mode === 'month') {
+        view.month = monthAdd(view.month, e.key === '[' ? -1 : 1);
+        view.selected = 0;
+        renderPage(el, deps);
+        return true;
+      }
+      break;
     default: break;
   }
 
@@ -927,11 +1015,14 @@ export function pageOnKey(e, el, deps) {
     }
   }
 
+  const period = periodOf(view);
   const invoices = deps.store.listInvoices({
     companyId: view.companyId || undefined,
     dir: view.dir || undefined,
     unpaid: view.unpaid || undefined,
     query: view.query || undefined,
+    from: period.from,
+    to: period.to,
     limit: 300,
   });
   switch (e.key) {

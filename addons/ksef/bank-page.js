@@ -5,7 +5,9 @@
 
 import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { setPaid } from './service.js';
-import { injectStyle } from './page.js';
+import {
+  injectStyle, currentMonth, monthAdd, monthLabel, periodBarHtml, bindPeriodBar, periodOf,
+} from './page.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const money = (n, cur = 'PLN') => `${(Number(n) || 0).toFixed(2)} ${cur}`;
@@ -14,11 +16,32 @@ const CATEGORIES = ['opłata bankowa', 'podatek / ZUS', 'przewalutowanie', 'wyna
 
 const bankView = {
   companyId: '',
-  month: new Date().toISOString().slice(0, 7),
+  mode: 'month',
+  month: currentMonth(),
+  from: '',
+  to: '',
   busy: '',
   error: '',
   info: '',
 };
+
+// Transactions live in buckets keyed by their OWN operation month — the
+// picker only selects what is shown, never where an upload lands
+function txsForView(store, company) {
+  const period = periodOf(bankView);
+  const months = store.bankMonths(company.id)
+    .filter((m) => (!period.from || m >= period.from.slice(0, 7)) && (!period.to || m <= period.to.slice(0, 7)));
+  return months
+    .flatMap((m) => store.bankMonth(company.id, m))
+    .filter((t) => (!period.from || t.date >= period.from) && (!period.to || t.date <= period.to))
+    .sort((a, b) => a.account.localeCompare(b.account) || a.date.localeCompare(b.date));
+}
+
+async function patchTx(store, company, tx, patch) {
+  const month = tx.date.slice(0, 7);
+  const list = store.bankMonth(company.id, month);
+  await store.saveBankMonth(company.id, month, list.map((t) => (t.id === tx.id ? { ...t, ...patch } : t)));
+}
 
 function fmtAccount(acc) {
   return String(acc || '').replace(/(\d{2})(?=(\d{4})+$)/, '$1 ').replace(/(\d{4})(?=\d)/g, '$1 ');
@@ -35,6 +58,19 @@ function activeCompany(store) {
   return store.company(bankView.companyId) || (companies.length === 1 ? companies[0] : null);
 }
 
+export function bankOnKey(e, el, deps) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (document.querySelector('.ksefad-overlay')) return false;
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
+  if ((e.key === '[' || e.key === ']') && bankView.mode === 'month') {
+    bankView.month = monthAdd(bankView.month, e.key === '[' ? -1 : 1);
+    renderBankPage(el, deps);
+    return true;
+  }
+  return false;
+}
+
 export function renderBankPage(el, deps) {
   injectStyle();
   const { store } = deps;
@@ -44,7 +80,7 @@ export function renderBankPage(el, deps) {
     return;
   }
   const company = activeCompany(store);
-  const txs = company ? store.bankMonth(company.id, bankView.month) : [];
+  const txs = company ? txsForView(store, company) : [];
   const byAccount = new Map();
   for (const tx of txs) {
     const key = `${tx.account}|${tx.currency}`;
@@ -60,11 +96,11 @@ export function renderBankPage(el, deps) {
     <div class="ksefad">
       <div class="ksefad-bar">
         <h2 style="margin:0; font-size:17px">🏦 Wyciągi bankowe</h2>
+        ${periodBarHtml(bankView)}
         ${companies.length > 1 ? `
           <select id="bankCompany">
             ${companies.map((c) => `<option value="${esc(c.id)}" ${company && c.id === company.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
           </select>` : ''}
-        <input type="month" id="bankMonth" value="${esc(bankView.month)}">
         <input type="file" id="bankFiles" multiple accept=".pdf" style="display:none">
         <button class="ksefad-btn primary" id="bankUpload" ${bankView.busy ? 'disabled' : ''}>${bankView.busy === 'parse' ? 'Analizuję…' : '+ Wgraj wyciągi (PDF)'}</button>
         <span style="flex:1"></span>
@@ -105,19 +141,23 @@ export function renderBankPage(el, deps) {
             </tbody>
           </table>`;
         }).join('')
-        || `<p class="ksefad-muted" style="padding:14px">Brak danych za ${esc(bankView.month)}. Wybierz miesiąc i wgraj pliki PDF z wyciągami (iPKO Biznes)${months.length ? ` — zapisane miesiące: ${months.join(', ')}` : ''}.</p>`}
+        || `<p class="ksefad-muted" style="padding:14px">Brak operacji w tym okresie. Wgraj pliki PDF z wyciągami (iPKO Biznes) — trafią do miesięcy wynikających z dat operacji${months.length ? `; zapisane miesiące: ${months.join(', ')}` : ''}.</p>`}
       </div>
+      <div class="ksefad-muted">[/]: miesiąc · klik w wiersz: szczegóły operacji</div>
     </div>`;
 
   const rerender = () => renderBankPage(el, deps);
+  bindPeriodBar(el, bankView, rerender);
   el.querySelector('#bankCompany')?.addEventListener('change', (e) => { bankView.companyId = e.target.value; rerender(); });
-  el.querySelector('#bankMonth').onchange = (e) => { bankView.month = e.target.value; bankView.info = ''; bankView.error = ''; rerender(); };
   el.querySelector('#bankUpload').onclick = () => el.querySelector('#bankFiles').click();
   el.querySelector('#bankFiles').onchange = (e) => ingestFiles(el, deps, company, e.target.files);
   el.querySelector('#bankRematch')?.addEventListener('click', async () => {
     const invoices = store.listInvoices({ companyId: company.id });
-    const cleared = txs.map((t) => (t.auto ? { ...t, invoiceId: '', matchedBy: '', category: '' } : t));
-    await store.saveBankMonth(company.id, bankView.month, matchTransactions(cleared, invoices));
+    const cleared = matchTransactions(
+      txs.map((t) => (t.auto ? { ...t, invoiceId: '', matchedBy: '', category: '' } : t)),
+      invoices,
+    );
+    for (const t of cleared) await patchTx(store, company, t, t);
     rerender();
   });
   el.querySelector('#bankMarkPaid')?.addEventListener('click', async (e) => {
@@ -139,7 +179,8 @@ export function renderBankPage(el, deps) {
     bankView.info = `Oznaczono ${n} faktur kosztowych jako zapłacone.`;
     rerender();
   });
-  el.querySelector('#bankReport')?.addEventListener('click', () => printReport(deps, company, bankView.month, txs));
+  el.querySelector('#bankReport')?.addEventListener('click', () => printReport(deps, company,
+    bankView.mode === 'month' ? monthLabel(bankView.month) : `${bankView.from} — ${bankView.to}`, txs));
   el.querySelectorAll('[data-tx]').forEach((row) => {
     row.onclick = (e) => {
       if (e.target.closest('button, select')) return;
@@ -151,15 +192,15 @@ export function renderBankPage(el, deps) {
   });
   el.querySelectorAll('[data-unassign]').forEach((btn) => {
     btn.onclick = async () => {
-      const next = txs.map((t) => (t.id === btn.dataset.unassign ? { ...t, invoiceId: '', matchedBy: '', auto: false } : t));
-      await store.saveBankMonth(company.id, bankView.month, next);
+      const tx = txs.find((t) => t.id === btn.dataset.unassign);
+      if (tx) await patchTx(store, company, tx, { invoiceId: '', matchedBy: '', auto: false });
       rerender();
     };
   });
   el.querySelectorAll('[data-category]').forEach((sel) => {
     sel.onchange = async () => {
-      const next = txs.map((t) => (t.id === sel.dataset.category ? { ...t, category: sel.value, auto: false } : t));
-      await store.saveBankMonth(company.id, bankView.month, next);
+      const tx = txs.find((t) => t.id === sel.dataset.category);
+      if (tx) await patchTx(store, company, tx, { category: sel.value, auto: false });
       rerender();
     };
   });
@@ -177,8 +218,6 @@ async function ingestFiles(el, deps, company, files) {
   bankView.info = '';
   renderBankPage(el, deps);
   try {
-    const existing = store.bankMonth(company.id, bankView.month);
-    const keepManual = new Map(existing.filter((t) => t.invoiceId || t.category).map((t) => [t.id, t]));
     const accountsSeen = new Set();
     let parsed = [];
     for (const file of files) {
@@ -191,18 +230,35 @@ async function ingestFiles(el, deps, company, files) {
       accountsSeen.add(st.account);
       parsed.push(...st.txs.map((t) => ({ ...t, account: st.account, currency: st.currency, bank: st.bank })));
     }
-    // Re-uploading replaces the parsed accounts but keeps other accounts'
-    // data and every manual assignment made before
-    const kept = existing.filter((t) => !accountsSeen.has(t.account));
-    parsed = parsed.map((t) => {
-      const old = keepManual.get(t.id);
-      return old ? { ...t, invoiceId: old.invoiceId, matchedBy: old.matchedBy, category: old.category, auto: old.auto } : t;
-    });
     const invoices = store.listInvoices({ companyId: company.id });
-    const next = [...kept, ...matchTransactions(parsed, invoices)]
-      .sort((a, b) => a.account.localeCompare(b.account) || a.date.localeCompare(b.date));
-    await store.saveBankMonth(company.id, bankView.month, next);
-    bankView.info = `Wczytano ${files.length} plik(i): ${parsed.length} operacji z ${accountsSeen.size} kont.`;
+    // Every operation lands in the bucket of its own month; re-uploading a
+    // statement replaces that account's rows in the affected months but
+    // keeps other accounts and every manual assignment made before
+    const byMonth = new Map();
+    for (const t of parsed) {
+      const m = t.date.slice(0, 7);
+      if (!byMonth.has(m)) byMonth.set(m, []);
+      byMonth.get(m).push(t);
+    }
+    for (const [month, list] of byMonth) {
+      const existing = store.bankMonth(company.id, month);
+      const keepManual = new Map(existing.filter((t) => t.invoiceId || t.category).map((t) => [t.id, t]));
+      const kept = existing.filter((t) => !accountsSeen.has(t.account));
+      const merged = list.map((t) => {
+        const old = keepManual.get(t.id);
+        return old ? { ...t, invoiceId: old.invoiceId, matchedBy: old.matchedBy, category: old.category, auto: old.auto } : t;
+      });
+      await store.saveBankMonth(company.id, month,
+        [...kept, ...matchTransactions(merged, invoices)]
+          .sort((a, b) => a.account.localeCompare(b.account) || a.date.localeCompare(b.date)));
+    }
+    // Jump the view to where the data actually went
+    const monthsTouched = [...byMonth.keys()].sort();
+    if (monthsTouched.length) {
+      bankView.mode = 'month';
+      bankView.month = monthsTouched[0];
+    }
+    bankView.info = `Wczytano ${files.length} plik(i): ${parsed.length} operacji z ${accountsSeen.size} kont → ${monthsTouched.map(monthLabel).join(', ') || 'brak operacji'}.`;
   } catch (err) {
     deps.cl.log('bank ingest failed:', err);
     bankView.error = String(err.message || err);
@@ -248,11 +304,7 @@ function openAssignModal(el, deps, company, tx) {
       </tbody></table>`;
     overlay.querySelectorAll('[data-pick]').forEach((row) => {
       row.onclick = async () => {
-        const txsNow = store.bankMonth(company.id, bankView.month);
-        const next = txsNow.map((t) => (t.id === tx.id
-          ? { ...t, invoiceId: row.dataset.pick, matchedBy: '', category: '', auto: false }
-          : t));
-        await store.saveBankMonth(company.id, bankView.month, next);
+        await patchTx(store, company, tx, { invoiceId: row.dataset.pick, matchedBy: '', category: '', auto: false });
         close();
         renderBankPage(el, deps);
       };
@@ -309,9 +361,7 @@ function openTxDetail(el, deps, company, tx) {
     openAssignModal(el, deps, company, tx);
   });
   overlay.querySelector('#txUnassign')?.addEventListener('click', async () => {
-    const txsNow = store.bankMonth(company.id, bankView.month);
-    await store.saveBankMonth(company.id, bankView.month,
-      txsNow.map((t) => (t.id === tx.id ? { ...t, invoiceId: '', matchedBy: '', auto: false } : t)));
+    await patchTx(store, company, tx, { invoiceId: '', matchedBy: '', auto: false });
     close();
     renderBankPage(el, deps);
   });
