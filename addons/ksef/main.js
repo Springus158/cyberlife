@@ -12,6 +12,8 @@ import { renderBankPage, bankOnKey } from './bank-page.js';
 import { renderFilesPage, filesOnKey } from './files-page.js';
 import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid } from './service.js';
 import { importFromFakturownia } from './fakturownia.js';
+import { parseStatement, matchTransactions, categorize } from './bank.js';
+import { extractFields, matchFileToInvoice } from './files.js';
 
 export default async function activate(cl) {
   const store = createStore(cl);
@@ -222,6 +224,171 @@ export default async function activate(cl) {
     }
     if (pageEl) renderPage(pageEl, deps);
     return results;
+  });
+
+  // ---- bank & files agent tools (the same operations the Wyciągi and
+  // Pliki pages do by hand) ----
+
+  const txStateOf = (t) => {
+    if (t.amount > 0) return 'in';
+    if (t.invoiceId) return 'ok';
+    return (t.category || categorize(t)) ? 'warn' : 'bad';
+  };
+
+  const slimTx = (t) => ({
+    id: t.id,
+    date: t.date,
+    amount: t.amount,
+    currency: t.currency,
+    account: (t.account || '').slice(-4),
+    type: t.type,
+    desc: (t.desc || '').slice(0, 220),
+    state: txStateOf(t),
+    invoiceId: t.invoiceId || '',
+    matchedBy: t.matchedBy || '',
+    category: t.category || '',
+  });
+
+  cl.registerAgentTool('list_bank_transactions', async (args) => {
+    const company = resolveCompany(args.company);
+    const months = args.month
+      ? [args.month]
+      : store.bankMonths(company.id).filter((m) =>
+        (!args.from || m >= args.from.slice(0, 7)) && (!args.to || m <= args.to.slice(0, 7)));
+    let txs = months.flatMap((m) => store.bankMonth(company.id, m));
+    if (args.from) txs = txs.filter((t) => t.date >= args.from);
+    if (args.to) txs = txs.filter((t) => t.date <= args.to);
+    if (args.state) txs = txs.filter((t) => txStateOf(t) === args.state);
+    if (args.query) {
+      const q = String(args.query).toLowerCase();
+      txs = txs.filter((t) => [t.date, t.type, t.desc, t.account, String(t.amount), t.matchedBy, t.category]
+        .some((v) => String(v || '').toLowerCase().includes(q)));
+    }
+    txs.sort((a, b) => a.date.localeCompare(b.date));
+    return { count: txs.length, transactions: txs.slice(0, args.limit || 200).map(slimTx) };
+  });
+
+  cl.registerAgentTool('assign_bank_transaction', async (args) => {
+    const company = resolveCompany(args.company);
+    for (const month of store.bankMonths(company.id)) {
+      const list = store.bankMonth(company.id, month);
+      const i = list.findIndex((t) => t.id === args.txId);
+      if (i < 0) continue;
+      const tx = { ...list[i] };
+      if (args.unassign) {
+        tx.invoiceId = '';
+        tx.matchedBy = '';
+        tx.auto = false;
+      } else if (args.invoiceId) {
+        if (!store.getInvoice(args.invoiceId)) throw new Error(`invoice ${args.invoiceId} not found`);
+        tx.invoiceId = args.invoiceId;
+        tx.matchedBy = args.matchedBy || 'agent';
+        tx.category = '';
+        tx.auto = false;
+      } else if (args.category) {
+        tx.category = args.category;
+        tx.auto = false;
+      } else if (args.verify) {
+        tx.matchedBy = `${(tx.matchedBy || '').replace(/\s*\(do weryfikacji\)/, '')} (zweryfikowane)`;
+        tx.auto = false;
+      } else {
+        throw new Error('pass invoiceId, category, unassign or verify');
+      }
+      await store.saveBankMonth(company.id, month, list.map((t, j) => (j === i ? tx : t)));
+      return { transaction: slimTx(tx) };
+    }
+    throw new Error(`transaction ${args.txId} not found in any month`);
+  });
+
+  cl.registerAgentTool('import_statement', async (args) => {
+    const company = resolveCompany(args.company);
+    const text = await cl.pdfText(args.dataBase64);
+    const stmt = parseStatement(text);
+    if (!stmt.txs.length) return { account: stmt.account, period: stmt.period, imported: 0, note: 'statement has no operations' };
+    const invoices = store.listInvoices({ companyId: company.id });
+    const byMonth = new Map();
+    for (const tx of stmt.txs) {
+      const mo = tx.date.slice(0, 7);
+      if (!byMonth.has(mo)) byMonth.set(mo, []);
+      byMonth.get(mo).push({ ...tx, account: stmt.account, currency: stmt.currency, stmtPeriod: stmt.period, stmtNo: stmt.stmtNo });
+    }
+    const months = {};
+    for (const [mo, incoming] of byMonth) {
+      const existing = store.bankMonth(company.id, mo);
+      const byId = new Map(existing.map((t) => [t.id, t]));
+      let added = 0;
+      for (const tx of incoming) {
+        if (!byId.has(tx.id)) {
+          byId.set(tx.id, tx);
+          added++;
+        }
+      }
+      let list = [...byId.values()].sort((a, b) => a.account.localeCompare(b.account)
+        || a.date.slice(0, 7).localeCompare(b.date.slice(0, 7)) || (a.seq ?? 0) - (b.seq ?? 0));
+      list = matchTransactions(list, invoices);
+      await store.saveBankMonth(company.id, mo, list);
+      months[mo] = { total: list.length, added, matched: list.filter((t) => t.invoiceId).length };
+    }
+    if (bankEl) renderBankPage(bankEl, deps);
+    return { bank: stmt.bank, account: stmt.account, currency: stmt.currency, period: stmt.period, months };
+  });
+
+  cl.registerAgentTool('add_invoice_file', async (args) => {
+    const company = resolveCompany(args.company);
+    const bytes = Uint8Array.from(atob(args.dataBase64), (c) => c.charCodeAt(0));
+    const hash = await crypto.subtle.digest('SHA-256', bytes);
+    const sha = [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const dup = store.files(company.id).find((f) => f.sha256 === sha);
+    if (dup) return { duplicate: true, file: dup };
+    const safe = String(args.name || 'dokument').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^A-Za-z0-9._-]+/g, '_').replace(/\.(png|jpe?g|pdf)$/i, '').slice(0, 70);
+    const isPdf = bytes[0] === 0x25 && bytes[1] === 0x50; // %P
+    let fields = { nips: [], dates: [], amounts: { strong: [], all: [] }, numbers: [], currency: '', vatRate: null };
+    if (isPdf) {
+      try {
+        fields = extractFields(await cl.pdfText(args.dataBase64), company.nip);
+      } catch (err) {
+        cl.log('add_invoice_file: pdfText failed (scan?):', err);
+      }
+    }
+    const month = (fields.dates[0] || '').slice(0, 7) || new Date().toISOString().slice(0, 7);
+    const key = `files/${month.replace('-', '/')}/${sha.slice(0, 12)}-${safe}.pdf`;
+    await cl.putDataFile(key, args.dataBase64, { toPdf: true });
+    const match = matchFileToInvoice(fields, store.listInvoices({ companyId: company.id }), { dir: 'cost' })
+      || matchFileToInvoice(fields, store.listInvoices({ companyId: company.id }), { dir: 'sale' });
+    const rec = {
+      id: sha.slice(0, 16),
+      sha256: sha,
+      key,
+      name: args.name || safe,
+      month,
+      source: 'agent',
+      invoiceId: match?.invoice.id || '',
+      matchedBy: match?.how || '',
+      nip: fields.nips[0] || '',
+      number: fields.numbers[0] || '',
+      docDate: fields.dates[0] || '',
+      gross: fields.amounts.strong[0] || 0,
+      currency: fields.currency || '',
+      vatRate: fields.vatRate ?? null,
+    };
+    await store.upsertFiles(company.id, [rec]);
+    if (filesEl) renderFilesPage(filesEl, deps);
+    return { file: rec, matched: !!match, matchedInvoice: match ? { id: match.invoice.id, number: match.invoice.number } : null };
+  });
+
+  cl.registerAgentTool('update_invoice', async (args) => {
+    const inv = store.getInvoice(args.id);
+    if (!inv) throw new Error(`invoice ${args.id} not found`);
+    const patch = {};
+    for (const field of ['number', 'issueDate', 'currency', 'gross', 'net', 'vat', 'sellerName', 'sellerNip', 'buyerName', 'buyerNip']) {
+      if (args[field] !== undefined) patch[field] = args[field];
+    }
+    if (patch.issueDate) assertDate(patch.issueDate, 'issueDate');
+    if (!Object.keys(patch).length) throw new Error('nothing to update');
+    const updated = await store.updateInvoice(args.id, patch);
+    if (pageEl) renderPage(pageEl, deps);
+    return { invoice: updated };
   });
 
   cl.registerAgentTool('list_unmatched_files', async (args) => {

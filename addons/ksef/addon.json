@@ -120,6 +120,85 @@
       }
     },
     {
+      "name": "list_bank_transactions",
+      "description": "List imported bank-statement operations. Filter by month (YYYY-MM), date range, free-text query or state: ok (paired with an invoice), warn (categorized fee/tax), bad (unassigned), in (incoming).",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "company": { "type": "string" },
+          "month": { "type": "string", "description": "YYYY-MM" },
+          "from": { "type": "string", "description": "YYYY-MM-DD" },
+          "to": { "type": "string", "description": "YYYY-MM-DD" },
+          "query": { "type": "string", "description": "Substring across date, type, description, amount, category, matchedBy" },
+          "state": { "type": "string", "enum": ["ok", "warn", "bad", "in"] },
+          "limit": { "type": "integer", "default": 200 }
+        }
+      }
+    },
+    {
+      "name": "assign_bank_transaction",
+      "description": "Pair a bank operation with an invoice (invoiceId), give it a non-invoice category, unassign it, or verify a tentative auto-match (verify: true).",
+      "schema": {
+        "type": "object",
+        "required": ["txId"],
+        "properties": {
+          "company": { "type": "string" },
+          "txId": { "type": "string", "description": "Operation id from list_bank_transactions" },
+          "invoiceId": { "type": "string" },
+          "category": { "type": "string", "description": "e.g. opłata bankowa, podatek / ZUS, przewalutowanie" },
+          "matchedBy": { "type": "string", "description": "Short note on how the pairing was decided" },
+          "unassign": { "type": "boolean" },
+          "verify": { "type": "boolean", "description": "Confirm a match labeled 'do weryfikacji'" }
+        }
+      }
+    },
+    {
+      "name": "import_statement",
+      "description": "Import a bank statement PDF (base64): parses (iPKO Biznes / iPKO history), buckets operations into their months, keeps existing assignments, auto-matches new operations against invoices.",
+      "schema": {
+        "type": "object",
+        "required": ["dataBase64"],
+        "properties": {
+          "company": { "type": "string" },
+          "dataBase64": { "type": "string", "description": "The statement PDF, base64-encoded" }
+        }
+      }
+    },
+    {
+      "name": "add_invoice_file",
+      "description": "Add an invoice document (PDF/PNG/JPEG, base64) to the file archive: dedupes by content hash, converts images to PDF, extracts fields (NIP, dates, amounts, currency, VAT rate) and auto-matches against invoices. Follow up with attach_file to pair or create the invoice record.",
+      "schema": {
+        "type": "object",
+        "required": ["dataBase64", "name"],
+        "properties": {
+          "company": { "type": "string" },
+          "dataBase64": { "type": "string" },
+          "name": { "type": "string", "description": "Original file name" }
+        }
+      }
+    },
+    {
+      "name": "update_invoice",
+      "description": "Patch fields of a local invoice record (number, issueDate, currency, gross, net, vat, sellerName, sellerNip, buyerName, buyerNip). Local only — does not push the change to Fakturownia or KSeF.",
+      "schema": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "number": { "type": "string" },
+          "issueDate": { "type": "string" },
+          "currency": { "type": "string" },
+          "gross": { "type": "number" },
+          "net": { "type": "number" },
+          "vat": { "type": "number" },
+          "sellerName": { "type": "string" },
+          "sellerNip": { "type": "string" },
+          "buyerName": { "type": "string" },
+          "buyerNip": { "type": "string" }
+        }
+      }
+    },
+    {
       "name": "list_unmatched_files",
       "description": "List archived invoice files (PDF scans) not yet paired with any invoice record",
       "schema": {
