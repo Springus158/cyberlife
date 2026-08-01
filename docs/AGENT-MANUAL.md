@@ -91,7 +91,9 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
    `description`, `category` (productivity | integrations | terminal |
    widgets | automation | appearance | development | other), `tags`,
    `entry`, `permissions` (only the API groups you call), plus declared
-   `widgets`/`modules` (ids namespaced `<id>.<name>`). Integration addons
+   `widgets`/`modules` (ids namespaced `<id>.<name>`; a multi-page module
+   also declares `pages: [{id, label, icon}]` — page ids are
+   module-scoped, not namespaced). Integration addons
    may also declare `hosts` (outbound HTTPS allowlist for `cl.http`,
    exact hostnames or `*.domain` wildcards) and `agentTools`
    (`[{name, description, schema}]` — exposed over MCP as
@@ -99,7 +101,14 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
 2. Entry module: `export default async function activate(cl) { … }`,
    optionally return a dispose function. The `cl` context:
    - `cl.registerModule({id, label, icon, render(el), onKey, onShow})` —
-     full page; tab, digit, palette and reorder support come free
+     full page; tab, digit, palette and reorder support come free.
+     **One addon = one shell tab.** An addon with several views registers
+     ONE module and replaces `render` with
+     `pages: [{id, label, icon, render(el), onKey, onShow}]` — the shell
+     then adds a compact, always-visible page bar under the module tab
+     (click or ⇧1..⇧9 switch pages, each page renders lazily and gets
+     `onKey` while active). Never register a second top-level module for
+     what is really a page of the same feature.
    - `cl.registerWidget({id, title, icon, render(el), dashboard})`
    - `cl.registerSettingsSection({id, label, icon, render(el)})` — a
      section in the Settings sidebar under the Addons group
@@ -117,7 +126,8 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
    - `cl.registerAgentTool(name, async handler(args))` — implements a
      manifest `agentTools` entry; the returned value becomes the MCP
      tool result (throw to report an error)
-   - `cl.openModule(id)` — switch the app to one of the addon's modules
+   - `cl.openModule(id, pageId?)` — switch the app to one of the addon's
+     modules, optionally straight to one of its pages
    - `cl.pdfText(dataBase64)` — layout-preserving text of a PDF via the
      app's pdftotext bridge (needs poppler installed; ≤15MB)
    - `cl.log(…)` — prefixed console logging

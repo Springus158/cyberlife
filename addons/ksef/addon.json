@@ -20,8 +20,15 @@
     { "id": "ksef.unpaid", "title": "Unpaid Invoices", "icon": "💸", "description": "Sales invoices awaiting payment", "dashboard": true }
   ],
   "modules": [
-    { "id": "ksef.invoices", "label": "Invoices", "icon": "🧾" },
-    { "id": "ksef.bank", "label": "Wyciągi", "icon": "🏦" }
+    {
+      "id": "ksef.main",
+      "label": "KSeF",
+      "icon": "🧾",
+      "pages": [
+        { "id": "invoices", "label": "Faktury", "icon": "🧾" },
+        { "id": "bank", "label": "Wyciągi", "icon": "🏦" }
+      ]
+    }
   ],
   "agentTools": [
     {

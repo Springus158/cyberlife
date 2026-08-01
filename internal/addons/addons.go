@@ -62,6 +62,15 @@ type ModuleDecl struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
 	Icon  string `json:"icon,omitempty"`
+	// Pages declares the sub-pages of a multi-page module (rendered by the
+	// shell as a compact second toolbar); page ids are module-scoped
+	Pages []PageDecl `json:"pages,omitempty"`
+}
+
+type PageDecl struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Icon  string `json:"icon,omitempty"`
 }
 
 type Manifest struct {
@@ -223,6 +232,14 @@ func validate(a Addon, dirName string) string {
 		}
 		if strings.TrimSpace(m.Label) == "" {
 			return fmt.Sprintf("module %q needs a label", m.ID)
+		}
+		for _, p := range m.Pages {
+			if !idPattern.MatchString(p.ID) {
+				return fmt.Sprintf("module %q page id %q must be 2-64 chars of a-z, 0-9, hyphens", m.ID, p.ID)
+			}
+			if strings.TrimSpace(p.Label) == "" {
+				return fmt.Sprintf("module %q page %q needs a label", m.ID, p.ID)
+			}
 		}
 	}
 	for _, h := range a.Hosts {

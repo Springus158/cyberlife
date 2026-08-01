@@ -5859,6 +5859,80 @@ body.wails-fullscreen .titlebar-drag-region {
   font-size: var(--fs-base);
 }
 
+/* Multi-page addon module: the panel owns a compact always-visible page
+   bar; scrolling happens inside each page, never on the panel itself */
+.addon-panel.addon-panel-paged {
+  padding: 0;
+  overflow: hidden;
+}
+
+.addon-subbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 5px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.addon-subtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.addon-subtab:hover {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.addon-subtab.active {
+  background: var(--bg-surface);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.addon-subtab-icon {
+  font-size: 13px;
+}
+
+.addon-subtab-digit {
+  font-size: 9px;
+  font-family: monospace;
+  color: var(--text-muted);
+}
+
+.addon-subtab.active .addon-subtab-digit {
+  color: var(--accent);
+}
+
+.addon-pages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.addon-page {
+  flex: 1;
+  overflow: auto;
+  padding: 1em 1.25em;
+  font-size: var(--fs-base);
+}
+
 .dash-header {
   display: flex;
   align-items: center;

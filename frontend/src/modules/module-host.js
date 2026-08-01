@@ -3,6 +3,7 @@
 // lifecycle (hide all panels -> show -> onShow -> repaint bar/status).
 
 import { state } from './state.js';
+import { escapeHtml } from './utils.js';
 import { renderTerminalDashboard, showTerminalDashboard, stopViewing, termModuleOnKey, DASHBOARD_TAB_ID, showDashboardPanel } from './terminal-dashboard.js';
 import { STRUCTURE_TAB_ID, showStructurePanel, switchToStructureTab, structureModuleOnKey } from './structure-panel.jsx';
 import { showPromptsPanel } from './tools-panel.js';
@@ -165,25 +166,37 @@ function updateModuleStatusBar() {
 // ============================================
 
 const addonPanels = new Map(); // module id -> panel element
+const addonPageSwitchers = new Map(); // module id -> showPage(pageId)
 
 export function registerAddonModule(addonId, desc) {
   const container = document.querySelector('#browserPanel .browser-content');
   if (!container) return;
   addonPanels.get(desc.id)?.remove();
+  addonPageSwitchers.delete(desc.id);
   const el = document.createElement('div');
   el.className = 'addon-panel';
   el.style.display = 'none';
   container.appendChild(el);
   addonPanels.set(desc.id, el);
 
-  let rendered = false;
+  const behavior = desc.pages?.length
+    ? makePagedModule(desc, el)
+    : makeSinglePageModule(desc, el);
   register({
     id: desc.id,
     label: desc.label,
     icon: desc.icon || '🧩',
     addonId,
-    onKey: desc.onKey,
     badge: desc.badge,
+    ...behavior,
+  });
+  renderModuleBar();
+}
+
+function makeSinglePageModule(desc, el) {
+  let rendered = false;
+  return {
+    onKey: desc.onKey,
     show: (visible) => { el.style.display = visible ? 'flex' : 'none'; },
     onShow: () => {
       if (!rendered) {
@@ -194,8 +207,82 @@ export function registerAddonModule(addonId, desc) {
       }
       desc.onShow?.(el);
     },
-  });
-  renderModuleBar();
+  };
+}
+
+// A multi-page addon module: one shell tab, a compact always-visible page
+// bar underneath (click or ⇧1..⇧9), lazy per-page render
+function makePagedModule(desc, el) {
+  el.classList.add('addon-panel-paged');
+  const bar = document.createElement('div');
+  bar.className = 'addon-subbar';
+  const pagesWrap = document.createElement('div');
+  pagesWrap.className = 'addon-pages';
+  el.append(bar, pagesWrap);
+
+  const pageEls = new Map();
+  for (const p of desc.pages) {
+    const pel = document.createElement('div');
+    pel.className = 'addon-page';
+    pel.style.display = 'none';
+    pagesWrap.appendChild(pel);
+    pageEls.set(p.id, pel);
+  }
+
+  const rendered = new Set();
+  let activePage = desc.pages[0].id;
+
+  const renderBar = () => {
+    bar.innerHTML = desc.pages.map((p, i) => `
+      <button class="addon-subtab ${p.id === activePage ? 'active' : ''}" data-page="${escapeHtml(p.id)}">
+        ${p.icon ? `<span class="addon-subtab-icon">${p.icon}</span>` : ''}
+        <span>${escapeHtml(p.label)}</span>
+        ${i < 9 ? `<span class="addon-subtab-digit">⇧${i + 1}</span>` : ''}
+      </button>
+    `).join('');
+    bar.querySelectorAll('.addon-subtab').forEach(btn => {
+      btn.addEventListener('click', () => showPage(btn.dataset.page));
+    });
+  };
+
+  const showPage = (pageId) => {
+    const page = desc.pages.find(p => p.id === pageId);
+    if (!page) return;
+    activePage = pageId;
+    for (const [pid, pel] of pageEls) pel.style.display = pid === pageId ? '' : 'none';
+    if (!rendered.has(pageId)) {
+      rendered.add(pageId);
+      Promise.resolve(page.render?.(pageEls.get(pageId))).catch(err => {
+        console.warn(`addon page ${desc.id}/${pageId}: render failed:`, err);
+      });
+    }
+    page.onShow?.(pageEls.get(pageId));
+    renderBar();
+  };
+
+  addonPageSwitchers.set(desc.id, showPage);
+  renderBar();
+
+  return {
+    show: (visible) => { el.style.display = visible ? 'flex' : 'none'; },
+    onShow: () => showPage(activePage),
+    onKey: (e) => {
+      const page = desc.pages.find(p => p.id === activePage);
+      if (page?.onKey?.(e)) return true;
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
+        const target = desc.pages[Number(e.code.slice(5)) - 1];
+        if (target) {
+          showPage(target.id);
+          return true;
+        }
+      }
+      return false;
+    },
+  };
+}
+
+export function switchAddonPage(moduleId, pageId) {
+  addonPageSwitchers.get(moduleId)?.(pageId);
 }
 
 export function unregisterAddonModules(addonId) {
@@ -204,6 +291,7 @@ export function unregisterAddonModules(addonId) {
   for (const mod of owned) {
     addonPanels.get(mod.id)?.remove();
     addonPanels.delete(mod.id);
+    addonPageSwitchers.delete(mod.id);
     unregisterModule(mod.id);
   }
   if (!getModules().some(m => m.id === state.shell.activeTabId)) {

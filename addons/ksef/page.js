@@ -1085,7 +1085,7 @@ export function renderTodayWidget(el, deps) {
           <span>${zl(i.gross, i.currency)}</span>
         </div>`).join('')}</div>`
     : '<div class="widget-empty">Nothing new from KSeF today</div>';
-  el.onclick = () => deps.cl.openModule('invoices');
+  el.onclick = () => deps.cl.openModule('main', 'invoices');
 }
 
 export function renderUnpaidWidget(el, deps) {
@@ -1105,7 +1105,7 @@ export function renderUnpaidWidget(el, deps) {
         </div>
       </div>`
     : '<div class="widget-empty">No unpaid sales invoices 🎉</div>';
-  el.onclick = () => deps.cl.openModule('invoices');
+  el.onclick = () => deps.cl.openModule('main', 'invoices');
 }
 
 // ---- settings ----

@@ -20,6 +20,7 @@ export const SHORTCUT_SECTIONS = [
     general: true,
     rows: [
       { keys: ['1', '…', '9'], desc: 'Switch module' },
+      { keys: ['⇧', '1', '…', '9'], desc: 'Switch page inside an addon module' },
       { keys: ['←', '→'], desc: 'Prev / next module' },
       { keys: ['⇧', 'T'], desc: 'Reorder tabs' },
       { keys: ['g', '+key'], desc: 'Go to: d/p/b/h/s/a/w/e/n/o' },

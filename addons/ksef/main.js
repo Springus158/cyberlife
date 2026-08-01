@@ -16,31 +16,37 @@ export default async function activate(cl) {
   const deps = { cl, http: cl.http.bind(cl), store };
 
   let pageEl = null;
-  cl.registerModule({
-    id: 'invoices',
-    label: 'Invoices',
-    icon: '🧾',
-    render(el) {
-      pageEl = el;
-      renderPage(el, deps);
-    },
-    onKey(e) {
-      return pageEl ? pageOnKey(e, pageEl, deps) : false;
-    },
-  });
-
   let bankEl = null;
   cl.registerModule({
-    id: 'bank',
-    label: 'Wyciągi',
-    icon: '🏦',
-    render(el) {
-      bankEl = el;
-      renderBankPage(el, deps);
-    },
-    onKey(e) {
-      return bankEl ? bankOnKey(e, bankEl, deps) : false;
-    },
+    id: 'main',
+    label: 'KSeF',
+    icon: '🧾',
+    pages: [
+      {
+        id: 'invoices',
+        label: 'Faktury',
+        icon: '🧾',
+        render(el) {
+          pageEl = el;
+          renderPage(el, deps);
+        },
+        onKey(e) {
+          return pageEl ? pageOnKey(e, pageEl, deps) : false;
+        },
+      },
+      {
+        id: 'bank',
+        label: 'Wyciągi',
+        icon: '🏦',
+        render(el) {
+          bankEl = el;
+          renderBankPage(el, deps);
+        },
+        onKey(e) {
+          return bankEl ? bankOnKey(e, bankEl, deps) : false;
+        },
+      },
+    ],
   });
 
   cl.registerWidget({ id: 'today', title: 'KSeF Today', icon: '📥', dashboard: true, render: (el) => renderTodayWidget(el, deps) });
@@ -155,8 +161,9 @@ export default async function activate(cl) {
   cl.log('KSeF addon active');
 
   return () => {
-    // The page element belongs to the host and is removed on deactivate;
-    // keeping the reference would have agent tools render into a detached node
+    // The page elements belong to the host and are removed on deactivate;
+    // keeping the references would have agent tools render into detached nodes
     pageEl = null;
+    bankEl = null;
   };
 }

@@ -5,7 +5,7 @@
 
 import * as bus from './bus.js';
 import { registerAddonWidget, removeAddonWidgets, rerenderSidebarWidgets } from './widgets.js';
-import { registerAddonModule, unregisterAddonModules, switchToModuleId } from './module-host.js';
+import { registerAddonModule, unregisterAddonModules, switchToModuleId, switchAddonPage } from './module-host.js';
 import { registerAddonSettingsSection, removeAddonSettingsSections, refreshSettingsIfOpen } from './settings-dashboard.js';
 import { setBuiltinStates } from './addon-state.js';
 import { renderModuleBar, getModules, getVisibleModules } from './shell.js';
@@ -203,14 +203,23 @@ function makeContext(addon, inst) {
     },
 
     registerModule(desc) {
-      if (!desc?.id || !desc.label || typeof desc.render !== 'function') {
-        throw new Error('registerModule needs {id, label, render(el)}');
+      const paged = Array.isArray(desc?.pages) && desc.pages.length > 0;
+      if (!desc?.id || !desc.label || (!paged && typeof desc.render !== 'function')) {
+        throw new Error('registerModule needs {id, label, render(el)} or {id, label, pages: [...]}');
+      }
+      if (paged) {
+        for (const p of desc.pages) {
+          if (!p?.id || !p.label || typeof p.render !== 'function') {
+            throw new Error('registerModule: each page needs {id, label, render(el)}');
+          }
+        }
       }
       registerAddonModule(addon.id, { ...desc, id: namespaced(desc.id) });
     },
 
-    openModule(id) {
+    openModule(id, pageId) {
       switchToModuleId(namespaced(id));
+      if (pageId) switchAddonPage(namespaced(id), pageId);
     },
 
     registerSettingsSection(desc) {
