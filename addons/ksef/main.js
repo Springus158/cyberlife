@@ -11,7 +11,7 @@ import {
 import { renderBankPage, bankOnKey } from './bank-page.js';
 import { renderFilesPage, filesOnKey } from './files-page.js';
 import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid } from './service.js';
-import { importFromFakturownia, fakturowniaMode } from './fakturownia.js';
+import { importFromFakturownia, fakturowniaMode, fvUpdateClientBankAccount } from './fakturownia.js';
 import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { extractFields, matchFileToInvoice } from './files.js';
 
@@ -436,6 +436,7 @@ export default async function activate(cl) {
     const ref = String(args.client || '').toLowerCase();
     const existing = clientsOf(company).find((c) => c.nip === normalizeNip(args.client) || c.name.toLowerCase() === ref);
 
+    let fvSync = null;
     if (args.bankAccounts !== undefined) {
       const target = existing || { name: args.client, nip: '' };
       const list = store.clientAccounts(company.id).slice();
@@ -445,6 +446,15 @@ export default async function activate(cl) {
       if (i >= 0) list[i] = entry;
       else list.push(entry);
       await store.saveClientAccounts(company.id, list.filter((e) => e.accounts.length));
+      if (dual && existing?.fvId) {
+        try {
+          await fvUpdateClientBankAccount(deps, company, existing.fvId, args.bankAccounts[0] || '');
+          fvSync = `primary account pushed to Fakturownia client #${existing.fvId}`;
+        } catch (err) {
+          cl.log('update_client: Fakturownia bank_account push failed:', err);
+          fvSync = `saved locally but Fakturownia rejected the update: ${err.message || err}`;
+        }
+      }
     }
 
     const dataFields = ['name', 'nip', 'address1', 'address2', 'email', 'phone', 'note'];
@@ -459,7 +469,7 @@ export default async function activate(cl) {
 
     const updated = clientsOf(company).find((c) => c.nip === normalizeNip(patch.nip || args.client)
       || c.name.toLowerCase() === String(patch.name || args.client).toLowerCase());
-    return { client: updated || null };
+    return { client: updated || null, ...(fvSync ? { fakturownia: fvSync } : {}) };
   });
 
   cl.registerAgentTool('list_unmatched_files', async (args) => {

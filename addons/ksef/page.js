@@ -5,6 +5,7 @@
 
 import {
   importFromFakturownia, fetchFakturowniaInfo, fetchFakturowniaClients, fakturowniaMode,
+  fvUpdateClientBankAccount,
 } from './fakturownia.js';
 import { syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, clearTokenCache, today } from './service.js';
 import { lineNet, lineVat } from './fa3.js';
@@ -641,6 +642,17 @@ export function renderClientsPage(el, deps) {
     else list.push({ name: sel.name, nip: sel.nip, accounts });
     await store.saveClientAccounts(view.companyId, list.filter((e) => e.accounts.length));
     view.error = '';
+    // Fakturownia keeps a single bank_account per client — the first
+    // number is the primary one and syncs there in dual mode
+    const comp = store.company(view.companyId);
+    if (sel.fvId && fakturowniaMode(comp) === 'dual') {
+      try {
+        await fvUpdateClientBankAccount(deps, comp, sel.fvId, accounts[0] || '');
+      } catch (err) {
+        deps.cl.log('client bank account push to Fakturownia failed:', err);
+        view.error = `Konta zapisane lokalnie, ale Fakturownia odrzuciła aktualizację: ${err.message || err}`;
+      }
+    }
     renderClientsPage(el, deps);
   });
   el.querySelector('#ksefadClientAdd')?.addEventListener('click', () => openClientForm(el, deps, editableCompany));

@@ -212,7 +212,7 @@
     },
     {
       "name": "update_client",
-      "description": "Update a client: bankAccounts (local overlay, works in every mode — replaces the whole list; used to recognize transfers on bank statements) and, for local clients only, contact/address fields. In dual mode client data itself is Fakturownia's — edit it there.",
+      "description": "Update a client: bankAccounts replaces the whole list (used to recognize transfers on bank statements); in dual mode the FIRST account also syncs to the Fakturownia client record (their single bank_account field), and accounts kept in Fakturownia flow back into the local register on every client refresh. Contact/address fields are editable for local clients only — in dual mode edit those in Fakturownia.",
       "schema": {
         "type": "object",
         "required": ["client"],

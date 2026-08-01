@@ -154,12 +154,39 @@ export async function fetchFakturowniaClients(deps, company, onProgress) {
         phone: c.phone || c.mobile_phone || '',
         note: c.note || '',
         kind: c.kind || '',
+        bankAccount: (c.bank_account || '').trim(),
       });
     }
     onProgress?.({ page, total: out.length });
   }
   await store.saveClients(company.id, out);
-  return { total: out.length };
+
+  // Accounts kept in Fakturownia flow into the local register (without
+  // overwriting locally-added numbers), so statement matching sees them
+  const register = store.clientAccounts(company.id).slice();
+  const keyOf = (e) => normalizeNip(e.nip) || `n:${String(e.name || '').toLowerCase()}`;
+  let merged = 0;
+  for (const c of out) {
+    if (!c.bankAccount) continue;
+    const i = register.findIndex((e) => keyOf(e) === keyOf(c));
+    const norm = (s) => String(s).replace(/[^0-9A-Za-z]/g, '');
+    if (i < 0) {
+      register.push({ name: c.name, nip: c.nip, accounts: [c.bankAccount] });
+      merged++;
+    } else if (!register[i].accounts.some((a) => norm(a) === norm(c.bankAccount))) {
+      register[i] = { ...register[i], accounts: [...register[i].accounts, c.bankAccount] };
+      merged++;
+    }
+  }
+  if (merged) await store.saveClientAccounts(company.id, register);
+  return { total: out.length, accountsMerged: merged };
+}
+
+export async function fvUpdateClientBankAccount({ http }, company, fvClientId, bankAccount) {
+  return fvRequest(http, company, `/clients/${fvClientId}.json`, {
+    method: 'PUT',
+    body: { client: { bank_account: bankAccount } },
+  });
 }
 
 // Read-only snapshot of the Fakturownia account: who the seller is there,
