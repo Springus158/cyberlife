@@ -199,6 +199,38 @@
       }
     },
     {
+      "name": "list_clients",
+      "description": "List clients (Fakturownia mirror in dual mode, local book otherwise) with their locally-stored bank account numbers.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "company": { "type": "string" },
+          "query": { "type": "string", "description": "Substring across name, NIP and bank accounts" },
+          "limit": { "type": "integer", "default": 100 }
+        }
+      }
+    },
+    {
+      "name": "update_client",
+      "description": "Update a client: bankAccounts (local overlay, works in every mode — replaces the whole list; used to recognize transfers on bank statements) and, for local clients only, contact/address fields. In dual mode client data itself is Fakturownia's — edit it there.",
+      "schema": {
+        "type": "object",
+        "required": ["client"],
+        "properties": {
+          "company": { "type": "string" },
+          "client": { "type": "string", "description": "Client name or NIP" },
+          "bankAccounts": { "type": "array", "items": { "type": "string" }, "description": "Full replacement list of account numbers (NRB/IBAN)" },
+          "name": { "type": "string" },
+          "nip": { "type": "string" },
+          "address1": { "type": "string" },
+          "address2": { "type": "string" },
+          "email": { "type": "string" },
+          "phone": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    {
       "name": "list_unmatched_files",
       "description": "List archived invoice files (PDF scans) not yet paired with any invoice record",
       "schema": {

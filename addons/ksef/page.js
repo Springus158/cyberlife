@@ -436,6 +436,16 @@ function clientsFor(store) {
       if (!seen.has(key)) seen.set(key, { ...cl, nip: normalizeNip(cl.nip), companyId: c.id, readonly: dual });
     }
   }
+  // People who exist only in the local account register (employees,
+  // partners) still deserve a row — the register is their client card
+  for (const c of companies) {
+    for (const e of store.clientAccounts(c.id)) {
+      const key = normalizeNip(e.nip) || `n:${String(e.name || '').toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.set(key, { name: e.name, nip: normalizeNip(e.nip), companyId: c.id, readonly: false, note: 'wpis lokalny (konta bankowe)' });
+      }
+    }
+  }
   let out = [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
   if (view.clientQuery) {
     const q = view.clientQuery.toLowerCase();
@@ -485,6 +495,15 @@ function clientInvoiceTableHtml(store, list) {
     </div>`;
 }
 
+export function clientAcctKey(entry) {
+  return normalizeNip(entry.nip) || `n:${String(entry.name || '').toLowerCase()}`;
+}
+
+function clientAcctEntry(store, client) {
+  const key = clientAcctKey(client);
+  return store.clientAccounts(view.companyId).find((e) => clientAcctKey(e) === key) || null;
+}
+
 function clientDetailHtml(store, client) {
   if (!client) return '<p class="ksefad-muted" style="padding:12px">Wybierz klienta z listy.</p>';
   const sub = view.clientTab;
@@ -502,6 +521,12 @@ function clientDetailHtml(store, client) {
         <div class="adk-muted">${client.readonly
           ? 'Dane z Fakturowni — tylko do odczytu, edycja w Fakturowni.'
           : 'Klient lokalny.'}</div>
+      </div>
+      <div class="adk-kv" style="margin-top:10px">
+        <div><b>Numery kont bankowych</b> <span class="adk-muted">(lokalne — do rozpoznawania przelewów na wyciągach)</span></div>
+        <textarea id="ksefadClientAccts" rows="3" style="width:100%; font-family:monospace"
+          placeholder="jeden numer konta na linię">${esc((clientAcctEntry(store, client)?.accounts || []).join('\n'))}</textarea>
+        <div class="adk-actions"><button class="adk-btn primary" id="ksefadClientAcctsSave">Zapisz konta</button></div>
       </div>
       ${client.readonly ? '' : '<div class="adk-actions"><button class="adk-btn" id="ksefadClientEdit">Edytuj</button></div>'}`;
   } else {
@@ -603,6 +628,19 @@ export function renderClientsPage(el, deps) {
       }
     }
     view.busy = '';
+    renderClientsPage(el, deps);
+  });
+  el.querySelector('#ksefadClientAcctsSave')?.addEventListener('click', async () => {
+    if (!sel) return;
+    const accounts = el.querySelector('#ksefadClientAccts').value
+      .split('\n').map((s) => s.trim()).filter(Boolean);
+    const list = store.clientAccounts(view.companyId).slice();
+    const key = clientAcctKey(sel);
+    const i = list.findIndex((e) => clientAcctKey(e) === key);
+    if (i >= 0) list[i] = { ...list[i], name: sel.name, nip: sel.nip, accounts };
+    else list.push({ name: sel.name, nip: sel.nip, accounts });
+    await store.saveClientAccounts(view.companyId, list.filter((e) => e.accounts.length));
+    view.error = '';
     renderClientsPage(el, deps);
   });
   el.querySelector('#ksefadClientAdd')?.addEventListener('click', () => openClientForm(el, deps, editableCompany));

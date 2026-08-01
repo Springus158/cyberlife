@@ -11,7 +11,7 @@ import {
 import { renderBankPage, bankOnKey } from './bank-page.js';
 import { renderFilesPage, filesOnKey } from './files-page.js';
 import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid } from './service.js';
-import { importFromFakturownia } from './fakturownia.js';
+import { importFromFakturownia, fakturowniaMode } from './fakturownia.js';
 import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { extractFields, matchFileToInvoice } from './files.js';
 
@@ -394,6 +394,72 @@ export default async function activate(cl) {
     const updated = await store.updateInvoice(args.id, patch);
     if (pageEl) renderPage(pageEl, deps);
     return { invoice: updated };
+  });
+
+  const clientKey = (e) => normalizeNip(e.nip) || `n:${String(e.name || '').toLowerCase()}`;
+
+  function clientsOf(company) {
+    const dual = fakturowniaMode(company) === 'dual';
+    const base = dual ? store.fvClients(company.id) : store.contractors(company.id);
+    const accounts = store.clientAccounts(company.id);
+    const out = base.filter((c) => c.name && c.name !== '-').map((c) => ({
+      ...c,
+      nip: normalizeNip(c.nip),
+      readonly: dual,
+      bankAccounts: accounts.find((e) => clientKey(e) === clientKey(c))?.accounts || [],
+    }));
+    for (const e of accounts) {
+      if (!out.some((c) => clientKey(c) === clientKey(e))) {
+        out.push({ name: e.name, nip: normalizeNip(e.nip), readonly: false, note: 'local account-register entry', bankAccounts: e.accounts });
+      }
+    }
+    return out;
+  }
+
+  cl.registerAgentTool('list_clients', async (args) => {
+    const company = resolveCompany(args.company);
+    let list = clientsOf(company);
+    if (args.query) {
+      const q = String(args.query).toLowerCase();
+      list = list.filter((c) => `${c.name} ${c.nip} ${(c.bankAccounts || []).join(' ')}`.toLowerCase().includes(q));
+    }
+    return {
+      count: list.length,
+      source: fakturowniaMode(company) === 'dual' ? 'fakturownia (read-only; bankAccounts are a local overlay)' : 'local',
+      clients: list.slice(0, args.limit || 100),
+    };
+  });
+
+  cl.registerAgentTool('update_client', async (args) => {
+    const company = resolveCompany(args.company);
+    const dual = fakturowniaMode(company) === 'dual';
+    const ref = String(args.client || '').toLowerCase();
+    const existing = clientsOf(company).find((c) => c.nip === normalizeNip(args.client) || c.name.toLowerCase() === ref);
+
+    if (args.bankAccounts !== undefined) {
+      const target = existing || { name: args.client, nip: '' };
+      const list = store.clientAccounts(company.id).slice();
+      const key = clientKey(target);
+      const i = list.findIndex((e) => clientKey(e) === key);
+      const entry = { name: target.name, nip: target.nip || '', accounts: args.bankAccounts };
+      if (i >= 0) list[i] = entry;
+      else list.push(entry);
+      await store.saveClientAccounts(company.id, list.filter((e) => e.accounts.length));
+    }
+
+    const dataFields = ['name', 'nip', 'address1', 'address2', 'email', 'phone', 'note'];
+    const patch = Object.fromEntries(dataFields.filter((f) => args[f] !== undefined).map((f) => [f, args[f]]));
+    if (Object.keys(patch).length) {
+      if (dual) {
+        throw new Error('client data comes from Fakturownia (read-only here) — edit it in Fakturownia; only bankAccounts are stored locally');
+      }
+      if (!existing && !patch.name) throw new Error(`client "${args.client}" not found — pass name to create one`);
+      await store.upsertContractors(company.id, [{ ...(existing || {}), name: patch.name || existing.name, ...patch }]);
+    }
+
+    const updated = clientsOf(company).find((c) => c.nip === normalizeNip(patch.nip || args.client)
+      || c.name.toLowerCase() === String(patch.name || args.client).toLowerCase());
+    return { client: updated || null };
   });
 
   cl.registerAgentTool('list_unmatched_files', async (args) => {

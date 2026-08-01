@@ -63,7 +63,7 @@ export function createStore(cl) {
     for (const key of Object.keys(cache)) {
       if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`) || key.startsWith(`bank:${id}:`)
         || key.startsWith(`files:${id}`)
-        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}`) {
+        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}`) {
         await drop(key);
       }
     }
@@ -392,6 +392,17 @@ export function createStore(cl) {
     return map;
   }
 
+  // ---- client bank accounts (local overlay — works for read-only
+  // Fakturownia clients too; entries: {name, nip, accounts: []}) ----
+
+  function clientAccounts(companyId) {
+    return cache[`caccts:${companyId}`] || [];
+  }
+
+  async function saveClientAccounts(companyId, list) {
+    await put(`caccts:${companyId}`, list);
+  }
+
   // ---- Fakturownia account snapshot (read-only display) ----
 
   function fvInfo(companyId) {
@@ -429,5 +440,7 @@ export function createStore(cl) {
     updateFileRec,
     deleteFileRec,
     fileByInvoice,
+    clientAccounts,
+    saveClientAccounts,
   };
 }

@@ -62,6 +62,38 @@ function fmtAccount(acc) {
   return String(acc || '').replace(/(\d{2})(?=(\d{4})+$)/, '$1 ').replace(/(\d{4})(?=\d)/g, '$1 ');
 }
 
+// Counterparty account from the operation description (PL NRB or IBAN),
+// normalized for comparison against the client-accounts register
+function normAcct(s) {
+  let t = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (/^PL\d{26}$/.test(t)) t = t.slice(2);
+  return t;
+}
+
+// Statement descriptions carry the counterparty account inline, without
+// any label — a 26-digit NRB (spaced in groups of 4) or an IBAN with a
+// known country prefix; card reference numbers are 23 digits so they
+// never collide with the NRB shape
+const NRB_RE = /\b\d{2}(?: ?\d{4}){6}\b/;
+// Foreign IBANs appear as one unbroken token in iPKO descriptions
+const IBAN_RE = /(?:^|[^A-Z0-9])((?:GB|DE|IE|NL|FR|ES|IT|CZ|SK|LT|LV|EE|BE|AT|CH|SE|NO|DK|FI|LU|PT|HR|SI|HU|RO|BG|GR|MT|CY)\d{2}[A-Z0-9]{10,30})(?![A-Z0-9])/;
+
+function counterAccount(desc) {
+  const d = String(desc || '');
+  const nrb = NRB_RE.exec(d);
+  if (nrb) return normAcct(nrb[0]);
+  const iban = IBAN_RE.exec(d);
+  return iban ? normAcct(iban[1]) : '';
+}
+
+function clientAcctMap(store, company) {
+  const map = new Map();
+  for (const e of store.clientAccounts(company.id)) {
+    for (const a of e.accounts || []) map.set(normAcct(a), e.name);
+  }
+  return map;
+}
+
 function invoiceLabel(store, id) {
   const inv = id ? store.getInvoice(id) : null;
   if (!inv) return '';
@@ -104,7 +136,10 @@ export function renderBankPage(el, deps) {
     String(t.amount), t.amount.toFixed(2), t.amount.toFixed(2).replace('.', ','),
     t.category || categorize(t), t.matchedBy,
     t.invoiceId ? invoiceLabel(store, t.invoiceId) : '',
+    txClient(t),
   ].some((v) => String(v || '').toLowerCase().includes(q));
+  const acctMap = company ? clientAcctMap(store, company) : new Map();
+  const txClient = (t) => acctMap.get(counterAccount(t.desc)) || '';
   const shown = txs.filter((t) => bankView.show[txState(t)] && matchesQuery(t));
   // No paging on purpose (desktop app, a few thousand rows render fine) —
   // the cap only guards against an unbounded future archive
@@ -154,7 +189,7 @@ export function renderBankPage(el, deps) {
           return `
           <h3 style="margin:14px 0 6px">${esc(list[0].bank || 'Bank')} · ${esc(fmtAccount(account))} <span class="ksefad-muted">(${esc(currency)})</span></h3>
           <table class="ksefad-table">
-            <thead><tr><th>Data</th><th>Typ</th><th>Opis</th><th style="text-align:right">Kwota</th><th>Faktura / kategoria</th></tr></thead>
+            <thead><tr><th>Data</th><th>Typ</th><th>Opis</th><th style="text-align:right">Kwota</th><th>Klient</th><th>Faktura / kategoria</th></tr></thead>
             <tbody>
               ${list.map((tx) => `
                 <tr data-tx="${esc(tx.id)}" class="ksefad-row-${txState(tx)}">
@@ -162,6 +197,7 @@ export function renderBankPage(el, deps) {
                   <td>${esc(tx.type)}</td>
                   <td title="${esc(tx.desc)}">${esc(tx.desc.length > 80 ? `${tx.desc.slice(0, 80)}…` : tx.desc)}</td>
                   <td style="text-align:right; white-space:nowrap; color:${tx.amount < 0 ? 'var(--error, #f38ba8)' : 'var(--success, #a6e3a1)'}">${money(tx.amount, currency)}</td>
+                  <td style="white-space:nowrap">${txClient(tx) ? `👤 ${esc(txClient(tx))}` : '<span class="ksefad-muted">—</span>'}</td>
                   <td>
                     ${tx.invoiceId
                       ? `<span class="ksefad-ok">✓</span> ${esc(invoiceLabel(store, tx.invoiceId))}
