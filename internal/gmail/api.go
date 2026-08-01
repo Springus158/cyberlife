@@ -375,6 +375,10 @@ func textToHTML(text string) string {
 // buildRawMessage builds a base64url RFC822 message: HTML body (+ optional Gmail
 // signature) and optional file attachments as multipart/mixed
 func buildRawMessage(to, subject, bodyText, signatureHTML, inReplyTo, references string, attachments []string) (string, error) {
+	return buildRawMessageCc(to, "", subject, bodyText, signatureHTML, inReplyTo, references, attachments)
+}
+
+func buildRawMessageCc(to, cc, subject, bodyText, signatureHTML, inReplyTo, references string, attachments []string) (string, error) {
 	htmlBody := "<div dir=\"ltr\">" + textToHTML(bodyText) + "</div>"
 	if signatureHTML != "" {
 		htmlBody += "<br><div class=\"gmail_signature\">" + signatureHTML + "</div>"
@@ -382,6 +386,9 @@ func buildRawMessage(to, subject, bodyText, signatureHTML, inReplyTo, references
 
 	var sb strings.Builder
 	sb.WriteString("To: " + to + "\r\n")
+	if cc != "" {
+		sb.WriteString("Cc: " + cc + "\r\n")
+	}
 	sb.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", subject) + "\r\n")
 	if inReplyTo != "" {
 		sb.WriteString("In-Reply-To: " + inReplyTo + "\r\n")
@@ -592,6 +599,17 @@ func CreateDraft(svc *gmailapi.Service, to, subject, body, signatureHTML string,
 		return "", err
 	}
 	return draft.Id, nil
+}
+
+// SendMessageCc sends a new message immediately with optional Cc
+// recipients (comma-separated)
+func SendMessageCc(svc *gmailapi.Service, to, cc, subject, body, signatureHTML string, attachments []string) error {
+	raw, err := buildRawMessageCc(to, cc, subject, body, signatureHTML, "", "", attachments)
+	if err != nil {
+		return err
+	}
+	_, err = svc.Users.Messages.Send("me", &gmailapi.Message{Raw: raw}).Do()
+	return err
 }
 
 // SendMessage sends a new message immediately

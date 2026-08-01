@@ -141,6 +141,12 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
    - `cl.mergePdfs(keys, outPath, {open})` — concatenate stored PDFs
      (poppler pdfunite) into a new blob-store file; `open: true` also
      opens the result in the system viewer
+   - `cl.htmlToPdf(html, outPath)` — render HTML to a real PDF in the
+     blob store (headless Chrome) — for email attachments
+   - `cl.sendEmail({account?, to, cc?, subject, body, attachmentKeys})`
+     — send through the app's Gmail integration; attachments are BLOB
+     STORE KEYS (host confines them to this addon's storage); empty
+     account uses the first configured Gmail account
    - `cl.putDataFile(path, dataBase64, {toPdf})` / `cl.dataFileUrl(path)`
      / `cl.deleteDataFile(path)` — per-addon blob store for binary
      artifacts too big for `cl.storage` (≤30MB per file), kept under

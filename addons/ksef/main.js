@@ -11,7 +11,7 @@ import {
 import { renderBankPage, bankOnKey } from './bank-page.js';
 import { renderFilesPage, filesOnKey } from './files-page.js';
 import { renderFvPage, fvOnKey } from './fv-page.js';
-import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid } from './service.js';
+import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid, backfillFvSalePdfs } from './service.js';
 import { importFromFakturownia, fakturowniaMode, fvUpdateClientBankAccount } from './fakturownia.js';
 import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { extractFields, matchFileToInvoice } from './files.js';
@@ -550,6 +550,13 @@ export default async function activate(cl) {
       };
     }
     throw new Error('pass invoiceId or createInvoice');
+  });
+
+  cl.registerAgentTool('backfill_fv_pdfs', async (args) => {
+    const company = resolveCompany(args.company);
+    const result = await backfillFvSalePdfs(deps, company, { limit: args.limit || 30 });
+    if (filesEl) renderFilesPage(filesEl, deps);
+    return result;
   });
 
   cl.registerAgentTool('import_fakturownia', async (args) => {

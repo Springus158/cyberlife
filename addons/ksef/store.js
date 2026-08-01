@@ -63,7 +63,7 @@ export function createStore(cl) {
     for (const key of Object.keys(cache)) {
       if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`) || key.startsWith(`bank:${id}:`)
         || key.startsWith(`files:${id}`)
-        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}` || key === `fvsync:${id}`) {
+        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}` || key === `fvsync:${id}` || key === `stmts:${id}`) {
         await drop(key);
       }
     }
@@ -405,6 +405,22 @@ export function createStore(cl) {
 
   // ---- Fakturownia account snapshot (read-only display) ----
 
+  // ---- original bank-statement PDFs (blob store + this registry;
+  // entries: {key, name, sha256, account, currency, period, months: []}) ----
+
+  function stmtFiles(companyId) {
+    return cache[`stmts:${companyId}`] || [];
+  }
+
+  async function addStmtFile(companyId, rec) {
+    const list = stmtFiles(companyId).slice();
+    if (list.some((e) => e.sha256 === rec.sha256)) return false;
+    list.push(rec);
+    list.sort((a, b) => String(b.months?.[0] || '').localeCompare(String(a.months?.[0] || '')));
+    await put(`stmts:${companyId}`, list);
+    return true;
+  }
+
   function fvSyncState(companyId) {
     return cache[`fvsync:${companyId}`] || null;
   }
@@ -452,5 +468,7 @@ export function createStore(cl) {
     saveClientAccounts,
     fvSyncState,
     setFvSyncState,
+    stmtFiles,
+    addStmtFile,
   };
 }

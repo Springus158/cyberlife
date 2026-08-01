@@ -155,6 +155,105 @@ func imageToPdf(ctx context.Context, data []byte) ([]byte, error) {
 	return os.ReadFile(out)
 }
 
+type addonHTMLToPdfRequest struct {
+	Addon   string `json:"addon"`
+	HTML    string `json:"html"`
+	OutPath string `json:"outPath"`
+}
+
+func findChrome() string {
+	for _, c := range []string{
+		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+		"/Applications/Chromium.app/Contents/MacOS/Chromium",
+	} {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	for _, name := range []string{"google-chrome", "chromium", "chromium-browser"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// handleAddonHTMLToPdf renders HTML to a PDF in the addon blob store via
+// headless Chrome — WKWebView cannot print without a window, and email
+// attachments need real PDFs, not printable pages.
+func (s *Server) handleAddonHTMLToPdf(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("POST only"))
+		return
+	}
+	var req addonHTMLToPdfRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	addon, ok := addons.Get(req.Addon, s.manager.GetAddonsEnabled())
+	if !ok || !addon.Enabled {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("addon %q is not enabled", req.Addon))
+		return
+	}
+	if req.HTML == "" || len(req.HTML) > maxPreviewBytes {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("html must be 1 byte to %d MB", maxPreviewBytes>>20))
+		return
+	}
+	outRel, ok := cleanRelPath(req.OutPath)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid outPath %q", req.OutPath))
+		return
+	}
+	chrome := findChrome()
+	if chrome == "" {
+		writeErr(w, http.StatusNotImplemented, fmt.Errorf("no Chrome/Chromium found for HTML→PDF rendering"))
+		return
+	}
+	root, err := paths.AddonData()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	tmp, err := os.CreateTemp("", "addon-htmlpdf-*.html")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer func() {
+		if err := os.Remove(tmp.Name()); err != nil {
+			logging.Debug("htmltopdf temp remove failed", "error", err)
+		}
+	}()
+	if _, err := tmp.WriteString(req.HTML); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		logging.Debug("htmltopdf temp close failed", "error", err)
+	}
+	outFull := filepath.Join(root, addon.ID, filepath.FromSlash(outRel))
+	if err := os.MkdirAll(filepath.Dir(outFull), 0o755); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, chrome,
+		"--headless", "--disable-gpu", "--no-pdf-header-footer",
+		"--print-to-pdf="+outFull, "file://"+tmp.Name())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, fmt.Errorf("chrome print failed: %v: %s", err, strings.TrimSpace(string(out))))
+		return
+	}
+	info, err := os.Stat(outFull)
+	if err != nil || info.Size() == 0 {
+		writeErr(w, http.StatusUnprocessableEntity, fmt.Errorf("chrome produced no PDF"))
+		return
+	}
+	logging.Info("addon html→pdf", "addon", addon.ID, "out", outRel, "bytes", info.Size())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": outRel, "size": info.Size()})
+}
+
 type addonPdfMergeRequest struct {
 	Addon   string   `json:"addon"`
 	Keys    []string `json:"keys"`

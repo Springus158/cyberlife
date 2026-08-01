@@ -6,8 +6,59 @@ import { buildFa3Xml, computeTotals, lineNet, lineVat } from './fa3.js';
 import { assertDate, normalizeNip } from './store.js';
 import {
   fakturowniaMode, createInFakturownia, createCostInFakturownia, fvSendToKsef, fvGovStatus, fvSetPaid,
-  importFromFakturownia, fetchFakturowniaClients,
+  importFromFakturownia, fetchFakturowniaClients, fetchFvPdf,
 } from './fakturownia.js';
+
+// Pull the rendered PDF of a Fakturownia document into the file archive
+// and register it against the invoice — the permanent copy, not a one-off
+export async function saveFvPdfToArchive(deps, company, inv) {
+  const { store } = deps;
+  const b64 = await fetchFvPdf(deps, company, inv.fvId);
+  const key = `files/fv/${inv.fvId}.pdf`;
+  await deps.cl.putDataFile(key, b64);
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+    .map((b) => b.toString(16).padStart(2, '0')).join('');
+  const rec = {
+    id: sha.slice(0, 16),
+    sha256: sha,
+    key,
+    name: `Fakturownia-${String(inv.number || inv.fvId).replace(/[^\w-]+/g, '_')}.pdf`,
+    month: String(inv.issueDate || '').slice(0, 7),
+    source: 'fakturownia',
+    invoiceId: inv.id,
+    matchedBy: 'PDF z Fakturowni',
+    number: inv.number || '',
+    docDate: inv.issueDate || '',
+    gross: inv.gross,
+    currency: inv.currency,
+  };
+  await store.upsertFiles(company.id, [rec]);
+  return rec;
+}
+
+// Every sales invoice mirrored from Fakturownia should carry its PDF in
+// the archive; runs bounded so a routine sync never stalls on a large
+// backlog — the remainder is picked up by the next run
+export async function backfillFvSalePdfs(deps, company, { limit = 20 } = {}) {
+  const { store, cl } = deps;
+  if (fakturowniaMode(company) !== 'dual') return { added: 0, remaining: 0, errors: [] };
+  const have = store.fileByInvoice(company.id);
+  const missing = store.listInvoices({ companyId: company.id, dir: 'sale' })
+    .filter((i) => i.fvId && i.kind !== 'proforma' && !have.has(i.id));
+  let added = 0;
+  const errors = [];
+  for (const inv of missing.slice(0, limit)) {
+    try {
+      await saveFvPdfToArchive(deps, company, inv);
+      added++;
+    } catch (err) {
+      cl.log('backfillFvSalePdfs failed for', inv.number, err);
+      errors.push(`${inv.number}: ${err.message || err}`);
+    }
+  }
+  return { added, remaining: Math.max(0, missing.length - added - errors.length), errors };
+}
 
 // KSeF caps a metadata query at 3 months; a cursor older than this would
 // make every sync fail, and since the cursor only advances on success the
@@ -126,6 +177,9 @@ export async function syncCompany(deps, company) {
         .catch((err) => log(`Fakturownia refresh failed (KSeF sync continues): ${err?.message || err}`));
       await fetchFakturowniaClients(deps, company)
         .catch((err) => log(`Fakturownia clients refresh failed: ${err?.message || err}`));
+      await backfillFvSalePdfs(deps, company, { limit: 20 })
+        .then((r) => { if (r.added) log(`Fakturownia PDFs archived: ${r.added} (${r.remaining} remaining)`); })
+        .catch((err) => log(`Fakturownia PDF backfill failed: ${err?.message || err}`));
     }
     const client = new KsefClient({ http, env: company.env || 'prod' });
     const accessToken = await accessTokenFor(http, company);

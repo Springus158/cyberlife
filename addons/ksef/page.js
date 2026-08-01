@@ -1266,6 +1266,8 @@ function companyFormHtml(c = {}) {
       <label class="adk-field"><span>Adres — linia 1</span><input data-f="address1" value="${esc(c.address1 || '')}" placeholder="ulica i numer"></label>
       <label class="adk-field"><span>Adres — linia 2</span><input data-f="address2" value="${esc(c.address2 || '')}" placeholder="kod i miejscowość"></label>
       <label class="adk-field"><span>Rachunek bankowy</span><input data-f="bankAccount" value="${esc(c.bankAccount || '')}"></label>
+      <label class="adk-field"><span>E-mail księgowej</span><input data-f="accountantEmail" type="email" value="${esc(c.accountantEmail || '')}" placeholder="ksiegowa@biuro.pl — cel raportów wysyłanych mailem"></label>
+      <label class="adk-field"><span>E-maile CC raportów <small>(po przecinku)</small></span><input data-f="accountantCc" value="${esc(c.accountantCc || '')}" placeholder="ja@firma.pl, wspolnik@firma.pl"></label>
       <label class="adk-field"><span>Wzorzec numeracji <small>(tylko gdy tryb Fakturownia: wyłączony)</small></span>
         <input data-f="numberingPattern" value="${esc(c.numberingPattern || '{nr}/{mm}/{yyyy}')}" title="{nr} kolejny numer, {mm} miesiąc, {yyyy} rok — w trybie dual numeruje Fakturownia wg własnego wzorca"></label>
       <label class="adk-field"><span>Środowisko KSeF</span><select data-f="env">
@@ -1345,6 +1347,8 @@ export function renderSettings(el, deps) {
       address1: get('address1'),
       address2: get('address2'),
       bankAccount: get('bankAccount'),
+      accountantEmail: get('accountantEmail'),
+      accountantCc: get('accountantCc'),
       numberingPattern: get('numberingPattern'),
       env: get('env') || 'prod',
       ksefToken: get('ksefToken'),

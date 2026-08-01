@@ -10,6 +10,8 @@ import {gmail} from '../models';
 
 export function AddKanbanComment(arg1:string,arg2:string,arg3:string,arg4:string):Promise<state.KanbanComment>;
 
+export function AddonSendEmail(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string,arg7:Array<string>):Promise<void>;
+
 export function AddonStorageAll(arg1:string):Promise<Record<string, string>>;
 
 export function AddonStorageDelete(arg1:string,arg2:string):Promise<void>;

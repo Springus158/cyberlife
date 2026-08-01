@@ -152,6 +152,10 @@ export function renderBankPage(el, deps) {
         ${txs.length ? `
           <button class="ksefad-btn" id="bankRematch">Dopasuj ponownie</button>
           <button class="ksefad-btn" id="bankMarkPaid">Oznacz dopasowane jako zapłacone</button>
+          <select id="bankReportMode" title="Lokalny: raport i załącznik otwierają się na tym komputerze. Email: wysyłka do księgowej z załącznikami (raport PDF, faktury spoza KSeF, oryginalne wyciągi).">
+            <option value="local" ${bankView.reportMode !== 'email' ? 'selected' : ''}>Lokalny</option>
+            <option value="email" ${bankView.reportMode === 'email' ? 'selected' : ''}>Email</option>
+          </select>
           <button class="ksefad-btn primary" id="bankReport">Raport dla księgowej</button>` : ''}
       </div>
       ${bankView.error ? `<div class="ksefad-error">${esc(bankView.error)}</div>` : ''}
@@ -260,11 +264,14 @@ export function renderBankPage(el, deps) {
     bankView.info = `Oznaczono ${n} faktur kosztowych jako zapłacone.`;
     rerender();
   });
+  el.querySelector('#bankReportMode')?.addEventListener('change', (e) => {
+    bankView.reportMode = e.target.value;
+  });
   el.querySelector('#bankReport')?.addEventListener('click', async () => {
     await printReport(deps, company,
       bankView.mode === 'month' ? monthLabel(bankView.month)
         : bankView.mode === 'all' ? 'cała historia'
-          : `${bankView.from} — ${bankView.to}`, txs);
+          : `${bankView.from} — ${bankView.to}`, txs, bankView.reportMode || 'local');
     rerender();
   });
   el.querySelectorAll('[data-tx]').forEach((row) => {
@@ -424,11 +431,28 @@ async function ingestFiles(el, deps, company, files) {
       for (let i = 0; i < buf.length; i += 0x8000) {
         bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
       }
-      const st = parseStatement(await cl.pdfText(btoa(bin)));
+      const b64 = btoa(bin);
+      const st = parseStatement(await cl.pdfText(b64));
       accountsSeen.add(st.account);
       parsed.push(...st.txs.map((t) => ({
         ...t, account: st.account, currency: st.currency, bank: st.bank, stmtPeriod: st.period, stmtNo: st.stmtNo,
       })));
+      // The original statement PDF goes to the archive (and later to the
+      // R2 mirror) — the accountant email attaches it from here
+      try {
+        const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))]
+          .map((x) => x.toString(16).padStart(2, '0')).join('');
+        const months = [...new Set(st.txs.map((t) => t.date.slice(0, 7)))].sort();
+        const year = (months[0] || st.period.slice(6, 10) || 'inne').slice(0, 4);
+        const safe = file.name.normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 70);
+        const key = `statements/${year}/${sha.slice(0, 12)}-${safe}`;
+        const added = await store.addStmtFile(company.id, {
+          key, name: file.name, sha256: sha, account: st.account, currency: st.currency, period: st.period, months,
+        });
+        if (added) await cl.putDataFile(key, b64);
+      } catch (err) {
+        cl.log('statement original archive failed:', err);
+      }
     }
     const invoices = store.listInvoices({ companyId: company.id });
     // Every operation lands in the bucket of its own month; re-uploading a
@@ -675,7 +699,7 @@ function nonKsefInvoices(store, company, txs) {
     .sort((a, b) => (a.dir === b.dir ? a.issueDate.localeCompare(b.issueDate) : (a.dir === 'sale' ? -1 : 1)));
 }
 
-async function printReport(deps, company, month, txs) {
+async function printReport(deps, company, month, txs, mode = 'local') {
   const { store } = deps;
   const byAccount = new Map();
   for (const tx of txs) {
@@ -690,18 +714,21 @@ async function printReport(deps, company, month, txs) {
   counts.bad = txs.length - counts.ok - counts.warn;
 
   // Second deliverable: the non-KSeF invoices of the period merged into
-  // one PDF from the file archive
+  // one PDF from the file archive (Fakturownia PDFs land there during
+  // sync, so by report time the archive is complete)
   const extraInvoices = nonKsefInvoices(store, company, txs);
   const fileMap = store.fileByInvoice(company.id);
   const withPdf = extraInvoices.filter((i) => fileMap.has(i.id));
   const withoutPdf = extraInvoices.filter((i) => !fileMap.has(i.id));
   let mergedNote = '';
+  let mergedKey = '';
   if (withPdf.length) {
     const outName = `reports/faktury-poza-ksef-${month.replace(/[^\dA-Za-z-]+/g, '_')}.pdf`;
     try {
-      await deps.cl.mergePdfs(withPdf.map((i) => fileMap.get(i.id).key), outName, { open: true });
+      await deps.cl.mergePdfs(withPdf.map((i) => fileMap.get(i.id).key), outName, { open: mode === 'local' });
+      mergedKey = outName;
       mergedNote = `Załącznik: <b>${withPdf.length}</b> faktur spoza KSeF w osobnym pliku PDF (${esc(outName.split('/').pop())}).`;
-      bankView.info = `✓ Raport (przeglądarka) + ${withPdf.length} faktur spoza KSeF w jednym PDF (otwarty).`;
+      if (mode === 'local') bankView.info = `✓ Raport (przeglądarka) + ${withPdf.length} faktur spoza KSeF w jednym PDF (otwarty).`;
     } catch (err) {
       deps.cl.log('invoice merge failed:', err);
       mergedNote = `<span style="color:#c0392b">Nie udało się skleić załącznika PDF: ${esc(err.message || err)}</span>`;
@@ -759,8 +786,96 @@ async function printReport(deps, company, month, txs) {
       ${extraSection}
     </div>`;
   const title = `Rozliczenie wyciągów ${month} — ${company.name}`;
-  deps.cl.openPreview(printDocHtml(title, body), title).catch((err) => {
-    deps.cl.log('report preview failed:', err);
-    bankView.error = `Nie udało się otworzyć raportu: ${err.message || err}`;
-  });
+  if (mode === 'local') {
+    deps.cl.openPreview(printDocHtml(title, body), title).catch((err) => {
+      deps.cl.log('report preview failed:', err);
+      bankView.error = `Nie udało się otworzyć raportu: ${err.message || err}`;
+    });
+    return;
+  }
+
+  // Email mode: the report becomes a real PDF and goes out with the merged
+  // invoices and the ORIGINAL statement PDFs of the period attached
+  try {
+    const slug = month.replace(/[^\dA-Za-z-]+/g, '_');
+    const reportKey = `reports/rozliczenie-${slug}.pdf`;
+    await deps.cl.htmlToPdf(printDocHtml(title, body), reportKey);
+    const monthsInPeriod = new Set(txs.map((t) => t.date.slice(0, 7)));
+    const stmtKeys = store.stmtFiles(company.id)
+      .filter((s) => (s.months || []).some((m) => monthsInPeriod.has(m)))
+      .map((s) => ({ key: s.key, label: `wyciąg: ${s.name}` }));
+    const attachments = [
+      { key: reportKey, label: `rozliczenie-${slug}.pdf (raport)` },
+      ...(mergedKey ? [{ key: mergedKey, label: `${mergedKey.split('/').pop()} (${withPdf.length} faktur spoza KSeF)` }] : []),
+      ...stmtKeys,
+    ];
+    openEmailModal(deps, company, {
+      subject: `${company.name} — dokumenty za ${month}`,
+      bodyText: `Dzień dobry,\n\nw załączeniu dokumenty za ${month}:\n— rozliczenie wyciągów bankowych (płatność ↔ faktura),\n— faktury spoza KSeF w jednym pliku PDF${stmtKeys.length ? ',\n— oryginalne wyciągi bankowe' : ''}.\n\nPozdrawiam\n${company.name}`,
+      attachments,
+    });
+  } catch (err) {
+    deps.cl.log('email report failed:', err);
+    bankView.error = `Nie udało się przygotować wysyłki: ${err.message || err}`;
+  }
+}
+
+function openEmailModal(deps, company, { subject, bodyText, attachments }) {
+  const ccList = String(company.accountantCc || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const overlay = document.createElement('div');
+  overlay.className = 'ksefad-overlay modal-overlay';
+  overlay.innerHTML = `
+    <div class="ksefad-modal lg" style="width:min(640px, 92vw)">
+      <h2 style="margin-bottom:6px">Wyślij do księgowej</h2>
+      <div class="adk-form" style="grid-template-columns:1fr">
+        <label class="adk-field"><span>Do</span><input id="emTo" type="email" value="${esc(company.accountantEmail || '')}" placeholder="ustaw e-mail księgowej w Ustawieniach firmy"></label>
+        <label class="adk-field"><span>Temat</span><input id="emSubject" value="${esc(subject)}"></label>
+        <label class="adk-field"><span>Treść</span><textarea id="emBody" rows="6">${esc(bodyText)}</textarea></label>
+      </div>
+      ${ccList.length ? `
+      <div class="adk-kv" style="margin-top:8px"><b>CC:</b>
+        ${ccList.map((cc, i) => `<label style="display:block"><input type="checkbox" data-cc="${i}" checked> ${esc(cc)}</label>`).join('')}
+      </div>` : ''}
+      <div class="adk-kv" style="margin-top:8px"><b>Załączniki (${attachments.length}):</b>
+        ${attachments.map((a) => `<div class="adk-muted">📎 ${esc(a.label)}</div>`).join('')}
+      </div>
+      <div class="adk-actions">
+        <span class="ksefad-error" id="emError"></span>
+        <span style="flex:1"></span>
+        <button class="adk-btn primary" id="emSend">Wyślij</button>
+        <button class="adk-btn" id="emCancel">Anuluj</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('#emCancel').onclick = close;
+  overlay.querySelector('#emSend').onclick = async () => {
+    const to = overlay.querySelector('#emTo').value.trim();
+    if (!to) {
+      overlay.querySelector('#emError').textContent = 'Adres „Do" jest wymagany (Ustawienia → firma → E-mail księgowej)';
+      return;
+    }
+    const cc = ccList.filter((_, i) => overlay.querySelector(`[data-cc="${i}"]`)?.checked).join(', ');
+    const btn = overlay.querySelector('#emSend');
+    btn.disabled = true;
+    btn.textContent = 'Wysyłam…';
+    try {
+      await deps.cl.sendEmail({
+        to,
+        cc,
+        subject: overlay.querySelector('#emSubject').value.trim(),
+        body: overlay.querySelector('#emBody').value,
+        attachmentKeys: attachments.map((a) => a.key),
+      });
+      bankView.info = `✓ Wysłano do ${to}${cc ? ` (CC: ${cc})` : ''} — ${attachments.length} załączników.`;
+      bankView.error = '';
+      close();
+    } catch (err) {
+      deps.cl.log('email send failed:', err);
+      btn.disabled = false;
+      btn.textContent = 'Wyślij';
+      overlay.querySelector('#emError').textContent = `Wysyłka nie powiodła się: ${err.message || err}`;
+    }
+  };
 }

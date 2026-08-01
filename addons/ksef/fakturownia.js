@@ -212,6 +212,19 @@ export async function fetchFakturowniaClients(deps, company, onProgress, { accou
   return { total: out.length, accountsMerged: merged };
 }
 
+// The rendered PDF of any Fakturownia document (sales invoice, expense,
+// DW) — the proxy base64-encodes binary responses
+export async function fetchFvPdf({ http }, company, fvId) {
+  const fk = company.fakturownia || {};
+  if (!fk.subdomain || !fk.token) throw new Error('Fakturownia is not configured');
+  const res = await http({
+    url: `https://${fk.subdomain}.fakturownia.pl/invoices/${fvId}.pdf?api_token=${encodeURIComponent(fk.token)}`,
+  });
+  if (res.status !== 200) throw new Error(`Fakturownia PDF #${fvId}: ${res.status}`);
+  if (!res.bodyBase64) throw new Error(`Fakturownia PDF #${fvId}: unexpected text response`);
+  return res.body;
+}
+
 export async function fvUpdateClientBankAccount({ http }, company, fvClientId, bankAccount) {
   return fvRequest(http, company, `/clients/${fvClientId}.json`, {
     method: 'PUT',

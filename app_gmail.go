@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kalor62/cyberlife/internal/gmail"
+	"github.com/kalor62/cyberlife/internal/paths"
 	"github.com/kalor62/cyberlife/internal/logging"
 	"github.com/kalor62/cyberlife/internal/platform"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -154,6 +155,44 @@ func (a *App) GmailSendMessage(account, to, subject, body, signatureHTML string,
 		return err
 	}
 	return gmail.SendMessage(svc, to, subject, body, signatureHTML, attachments)
+}
+
+// AddonSendEmail sends a message on behalf of an addon: attachments are
+// BLOB-STORE KEYS (addon-data/<addonId>/…), never arbitrary paths, so an
+// addon cannot exfiltrate files outside its own storage. Empty account
+// uses the first configured Gmail account.
+func (a *App) AddonSendEmail(addonID, account, to, cc, subject, body string, attachmentKeys []string) error {
+	if account == "" {
+		if a.stateManager == nil {
+			return fmt.Errorf("state not ready")
+		}
+		accounts := a.stateManager.GetGmailSettings().Accounts
+		if len(accounts) == 0 {
+			return fmt.Errorf("no Gmail account configured (Settings → Mail)")
+		}
+		account = accounts[0].Email
+	}
+	root, err := paths.AddonData()
+	if err != nil {
+		return err
+	}
+	attachments := make([]string, 0, len(attachmentKeys))
+	for _, key := range attachmentKeys {
+		clean := filepath.Clean("/" + filepath.ToSlash(key))
+		if strings.Contains(clean, "..") {
+			return fmt.Errorf("invalid attachment key %q", key)
+		}
+		full := filepath.Join(root, filepath.Base(addonID), filepath.FromSlash(clean))
+		if _, err := os.Stat(full); err != nil {
+			return fmt.Errorf("attachment %q not found in the addon store", key)
+		}
+		attachments = append(attachments, full)
+	}
+	svc, err := a.gmailService(account)
+	if err != nil {
+		return err
+	}
+	return gmail.SendMessageCc(svc, to, cc, subject, body, "", attachments)
 }
 
 // GmailGetSignature returns the account's default Gmail signature (HTML)

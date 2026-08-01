@@ -6,6 +6,10 @@ export function AddKanbanComment(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['AddKanbanComment'](arg1, arg2, arg3, arg4);
 }
 
+export function AddonSendEmail(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['AddonSendEmail'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+}
+
 export function AddonStorageAll(arg1) {
   return window['go']['main']['App']['AddonStorageAll'](arg1);
 }

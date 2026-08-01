@@ -9,7 +9,7 @@ import { registerAddonModule, unregisterAddonModules, switchToModuleId, switchAd
 import { registerAddonSettingsSection, removeAddonSettingsSections, refreshSettingsIfOpen } from './settings-dashboard.js';
 import { setBuiltinStates } from './addon-state.js';
 import { renderModuleBar, getModules, getVisibleModules } from './shell.js';
-import { AddonsList, AddonStorageAll, AddonStorageSet, AddonStorageDelete } from '../../wailsjs/go/main/App.js';
+import { AddonsList, AddonStorageAll, AddonStorageSet, AddonStorageDelete, AddonSendEmail } from '../../wailsjs/go/main/App.js';
 import { API_BASE } from './utils.js';
 
 const active = new Map(); // addon id -> { addon, dispose, cleanups }
@@ -311,6 +311,27 @@ function makeContext(addon, inst) {
         throw new Error(`pdfmerge: ${res.status} ${await res.text()}`);
       }
       return res.json();
+    },
+
+    // Render HTML to a PDF stored in the addon blob store (headless
+    // Chrome) — for email attachments, where a printable page is not enough
+    async htmlToPdf(html, outPath) {
+      const res = await fetch(`${API_BASE}/api/addons/htmltopdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addon: addon.id, html, outPath }),
+      });
+      if (!res.ok) {
+        throw new Error(`htmltopdf: ${res.status} ${await res.text()}`);
+      }
+      return res.json();
+    },
+
+    // Send an email through the app's Gmail integration; attachments are
+    // blob-store KEYS (the host confines them to this addon's storage)
+    async sendEmail({ account = '', to, cc = '', subject, body, attachmentKeys = [] }) {
+      if (!to) throw new Error('sendEmail needs a recipient');
+      await AddonSendEmail(addon.id, account, to, cc, subject, body, attachmentKeys);
     },
 
     dataFileUrl(path) {

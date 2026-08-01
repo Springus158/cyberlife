@@ -275,6 +275,17 @@
       }
     },
     {
+      "name": "backfill_fv_pdfs",
+      "description": "Download rendered PDFs from Fakturownia for sales invoices that have no file in the archive yet (dual mode; runs bounded — call repeatedly until remaining is 0). Sync does this automatically for new invoices.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "company": { "type": "string" },
+          "limit": { "type": "integer", "default": 30 }
+        }
+      }
+    },
+    {
       "name": "import_fakturownia",
       "description": "Run the full Fakturownia.pl history import for a company (idempotent, re-runnable)",
       "schema": {

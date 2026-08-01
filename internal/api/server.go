@@ -150,6 +150,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/addons/preview", s.handleAddonPreview)
 	mux.HandleFunc("/api/addons/datafile", s.handleAddonDataFile)
 	mux.HandleFunc("/api/addons/pdfmerge", s.handleAddonPdfMerge)
+	mux.HandleFunc("/api/addons/htmltopdf", s.handleAddonHTMLToPdf)
 	mux.HandleFunc("/api/addons/tool-result", s.handleAddonToolResult)
 	mux.HandleFunc("/api/mail/image", s.handleMailImage)
 	mux.HandleFunc("/addons/", s.handleAddonAsset)
