@@ -34,7 +34,9 @@ function txsForView(store, company) {
   return months
     .flatMap((m) => store.bankMonth(company.id, m))
     .filter((t) => (!period.from || t.date >= period.from) && (!period.to || t.date <= period.to))
-    .sort((a, b) => a.account.localeCompare(b.account) || a.date.localeCompare(b.date));
+    .sort((a, b) => a.account.localeCompare(b.account)
+      || (a.seq ?? Number.MAX_SAFE_INTEGER) - (b.seq ?? Number.MAX_SAFE_INTEGER)
+      || a.date.localeCompare(b.date));
 }
 
 async function patchTx(store, company, tx, patch) {
@@ -228,7 +230,9 @@ async function ingestFiles(el, deps, company, files) {
       }
       const st = parseStatement(await cl.pdfText(btoa(bin)));
       accountsSeen.add(st.account);
-      parsed.push(...st.txs.map((t) => ({ ...t, account: st.account, currency: st.currency, bank: st.bank })));
+      parsed.push(...st.txs.map((t) => ({
+        ...t, account: st.account, currency: st.currency, bank: st.bank, stmtPeriod: st.period, stmtNo: st.stmtNo,
+      })));
     }
     const invoices = store.listInvoices({ companyId: company.id });
     // Every operation lands in the bucket of its own month; re-uploading a
@@ -250,7 +254,9 @@ async function ingestFiles(el, deps, company, files) {
       });
       await store.saveBankMonth(company.id, month,
         [...kept, ...matchTransactions(merged, invoices)]
-          .sort((a, b) => a.account.localeCompare(b.account) || a.date.localeCompare(b.date)));
+          .sort((a, b) => a.account.localeCompare(b.account)
+            || (a.seq ?? 0) - (b.seq ?? 0)
+            || a.date.localeCompare(b.date)));
     }
     // Jump the view to where the data actually went
     const monthsTouched = [...byMonth.keys()].sort();
@@ -367,6 +373,80 @@ function openTxDetail(el, deps, company, tx) {
   });
 }
 
+// The accountant report mirrors the source statement 1:1 — same order,
+// same per-operation fields (both dates, operation id, amount, running
+// balance) — so the original can be laid next to it. One template per
+// bank; new banks add a parser in bank.js and a template here.
+const plMoney = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function txStatus(store, tx) {
+  if (tx.invoiceId) {
+    const inv = store.getInvoice(tx.invoiceId);
+    return {
+      color: '#e3f1e3',
+      label: `<b>${esc(inv?.number || inv?.ksefNumber || tx.invoiceId)}</b>`
+        + `${inv ? `<br>${esc(inv.dir === 'cost' ? inv.sellerName : inv.buyerName)}` : ''}`
+        + `<br><span style="color:#555">${esc(tx.matchedBy || 'przypisano ręcznie')}</span>`,
+    };
+  }
+  const category = tx.category || categorize(tx);
+  if (category) return { color: '#fbf3d2', label: `${esc(category)}<br><span style="color:#555">bez faktury</span>` };
+  return { color: '#f8dcdc', label: '<b>DO WYJAŚNIENIA</b>' };
+}
+
+function ipkoReportSection(store, company, account, currency, list) {
+  const first = list[0] || {};
+  const sumMa = list.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const sumWn = list.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0);
+  const hasSaldo = list.every((t) => typeof t.saldo === 'number');
+  const saldoStart = hasSaldo && list.length ? list[0].saldo - list[0].amount : null;
+  const saldoEnd = hasSaldo && list.length ? list[list.length - 1].saldo : null;
+  const cell = 'border:1px solid #bbb; padding:3px 6px; vertical-align:top;';
+  return `
+    <div style="border-top:2px solid #333; margin-top:20px; padding-top:8px">
+      <table style="width:100%; margin-bottom:8px"><tr>
+        <td style="vertical-align:top">
+          <div style="font-size:14px"><b>WYCIĄG za okres ${esc(first.stmtPeriod || '')}</b> — raport rozliczenia</div>
+          <div>Nr: ${esc(first.stmtNo || '—')} · ${esc(first.bank || '')}</div>
+          <div>Nr rachunku: <b>${esc(fmtAccount(account))}</b> · Waluta: ${esc(currency)}</div>
+        </td>
+        <td style="vertical-align:top; text-align:right">
+          <div>${esc(company.name)}</div>
+          <div>Obroty MA: <b>${plMoney(sumMa)}</b> · Obroty WN: <b>${plMoney(sumWn)}</b></div>
+          ${saldoStart !== null ? `<div>Saldo poprzednie: <b>${plMoney(saldoStart)}</b> · Saldo końcowe: <b>${plMoney(saldoEnd)}</b></div>` : ''}
+        </td>
+      </tr></table>
+      <table style="width:100%; border-collapse:collapse; font-size:10.5px">
+        <thead><tr>
+          ${['Data operacji<br>Data waluty', 'Identyfikator operacji<br>Opis operacji', 'TYP OPERACJI', 'Kwota operacji', 'Saldo', 'Rozliczenie']
+            .map((h) => `<th style="${cell} background:#e8e8e8; text-align:left">${h}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${list.map((t) => {
+            const st = txStatus(store, t);
+            return `
+            <tr style="background:${st.color}">
+              <td style="${cell} border-bottom:none; white-space:nowrap">${esc(t.date)}</td>
+              <td style="${cell} border-bottom:none">${esc(t.id)}</td>
+              <td style="${cell} border-bottom:none">${esc(t.type)}</td>
+              <td style="${cell} border-bottom:none; text-align:right; white-space:nowrap"><b>${plMoney(t.amount)}</b></td>
+              <td style="${cell} border-bottom:none; text-align:right; white-space:nowrap">${typeof t.saldo === 'number' ? plMoney(t.saldo) : ''}</td>
+              <td style="${cell}" rowspan="2">${st.label}</td>
+            </tr>
+            <tr style="background:${st.color}">
+              <td style="${cell} border-top:none; white-space:nowrap">${esc(t.valueDate || '')}</td>
+              <td style="${cell} border-top:none" colspan="4"><span style="color:#333">${esc(t.desc)}</span></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+const REPORT_TEMPLATES = {
+  'PKO BP (iPKO Biznes)': ipkoReportSection,
+};
+
 function printReport(deps, company, month, txs) {
   const { store } = deps;
   const byAccount = new Map();
@@ -375,45 +455,26 @@ function printReport(deps, company, month, txs) {
     if (!byAccount.has(key)) byAccount.set(key, []);
     byAccount.get(key).push(tx);
   }
-  const cell = 'border:1px solid #999; padding:4px 6px;';
-  const section = (account, currency, list) => {
-    const matchedRows = list.filter((t) => t.invoiceId);
-    const otherRows = list.filter((t) => !t.invoiceId);
-    return `
-      <h3 style="margin:18px 0 6px">Rachunek ${esc(fmtAccount(account))} (${esc(currency)})</h3>
-      <h4 style="margin:10px 0 4px">Płatności przypisane do faktur (${matchedRows.length})</h4>
-      ${matchedRows.length ? `
-      <table style="width:100%; border-collapse:collapse; font-size:11px">
-        <thead><tr>${['Data', 'Opis operacji', 'Kwota', 'Faktura'].map((h) => `<th style="${cell} background:#f0f0f0; text-align:left">${h}</th>`).join('')}</tr></thead>
-        <tbody>${matchedRows.map((t) => {
-          const inv = store.getInvoice(t.invoiceId);
-          return `<tr>
-            <td style="${cell}">${esc(t.date)}</td>
-            <td style="${cell}">${esc(t.desc.slice(0, 90))}</td>
-            <td style="${cell} text-align:right">${money(t.amount, currency)}</td>
-            <td style="${cell}"><b>${esc(inv?.number || inv?.ksefNumber || t.invoiceId)}</b>${inv ? ` — ${esc(inv.dir === 'cost' ? inv.sellerName : inv.buyerName)}` : ''}</td>
-          </tr>`;
-        }).join('')}</tbody>
-      </table>` : '<p style="font-size:11px">brak</p>'}
-      <h4 style="margin:10px 0 4px">Operacje bez faktury (${otherRows.length})</h4>
-      ${otherRows.length ? `
-      <table style="width:100%; border-collapse:collapse; font-size:11px">
-        <thead><tr>${['Data', 'Opis operacji', 'Kwota', 'Kategoria'].map((h) => `<th style="${cell} background:#f0f0f0; text-align:left">${h}</th>`).join('')}</tr></thead>
-        <tbody>${otherRows.map((t) => `<tr>
-            <td style="${cell}">${esc(t.date)}</td>
-            <td style="${cell}">${esc(t.desc.slice(0, 90))}</td>
-            <td style="${cell} text-align:right">${money(t.amount, currency)}</td>
-            <td style="${cell}">${esc(t.category || categorize(t) || 'do wyjaśnienia')}</td>
-          </tr>`).join('')}</tbody>
-      </table>` : '<p style="font-size:11px">brak</p>'}`;
+  const counts = {
+    ok: txs.filter((t) => t.invoiceId).length,
+    warn: txs.filter((t) => !t.invoiceId && (t.category || categorize(t))).length,
   };
+  counts.bad = txs.length - counts.ok - counts.warn;
+  const legend = (color, label) =>
+    `<span style="display:inline-block; padding:1px 10px; background:${color}; border:1px solid #bbb; margin-right:8px">${label}</span>`;
   const body = `
-    <div style="font-family: Arial, Helvetica, sans-serif; font-size:12px; padding:24px; max-width:800px; margin:0 auto">
+    <div style="font-family: Arial, Helvetica, sans-serif; font-size:12px; padding:24px; max-width:980px; margin:0 auto">
       <h2 style="margin-bottom:2px">Rozliczenie wyciągów bankowych — ${esc(month)}</h2>
-      <div style="color:#555; margin-bottom:8px">${esc(company.name)} · NIP ${esc(company.nip)} · wygenerowano ${new Date().toISOString().slice(0, 10)}</div>
+      <div style="color:#555; margin-bottom:6px">${esc(company.name)} · NIP ${esc(company.nip)} · wygenerowano ${new Date().toISOString().slice(0, 10)}</div>
+      <div style="margin-bottom:4px">
+        ${legend('#e3f1e3', `przypisane do faktury (${counts.ok})`)}
+        ${legend('#fbf3d2', `bez faktury — opłaty/podatki (${counts.warn})`)}
+        ${legend('#f8dcdc', `do wyjaśnienia (${counts.bad})`)}
+      </div>
       ${[...byAccount.entries()].map(([key, list]) => {
         const [account, currency] = key.split('|');
-        return section(account, currency, list);
+        const template = REPORT_TEMPLATES[list[0]?.bank] || ipkoReportSection;
+        return template(store, company, account, currency, list);
       }).join('')}
     </div>`;
   const title = `Rozliczenie wyciągów ${month} — ${company.name}`;

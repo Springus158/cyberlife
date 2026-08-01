@@ -24,8 +24,11 @@ function isoDate(ddmmyyyy) {
 export function parseIpkoStatement(text) {
   let account = '';
   let currency = 'PLN';
+  let period = '';
+  let stmtNo = '';
   const txs = [];
   let cur = null;
+  let seq = 0;
   const flush = () => {
     if (cur) {
       cur.desc = cur.descLines.join(' ').replace(/\s+/g, ' ').trim();
@@ -45,26 +48,35 @@ export function parseIpkoStatement(text) {
       currency = curr[1];
       continue;
     }
+    const per = /WYCI.G za okres (\d{2}\.\d{2}\.\d{4}) - (\d{2}\.\d{2}\.\d{4})/.exec(line);
+    if (per) period = `${per[1]} – ${per[2]}`;
+    const nr = /^\s*Nr:\s*(\S+)/.exec(line);
+    if (nr) stmtNo = nr[1];
     if (IPKO_NOISE_RE.test(line)) continue;
     const head = IPKO_HEAD_RE.exec(line);
     if (head) {
       flush();
       cur = {
         id: head[2],
+        seq: seq++,
         date: isoDate(head[1]),
+        valueDate: '',
         type: head[3].trim(),
         amount: plAmount(head[4]),
+        saldo: plAmount(head[5]),
         descLines: [],
       };
       continue;
     }
     if (cur) {
+      const vd = /^(\d{2}\.\d{2}\.\d{4})\s+/.exec(line.trim());
+      if (vd && !cur.valueDate) cur.valueDate = isoDate(vd[1]);
       const s = line.trim().replace(/^\d{2}\.\d{2}\.\d{4}\s+/, '');
       if (s) cur.descLines.push(s);
     }
   }
   flush();
-  return { bank: 'PKO BP (iPKO Biznes)', account, currency, txs };
+  return { bank: 'PKO BP (iPKO Biznes)', account, currency, period, stmtNo, txs };
 }
 
 // Every parser gets a sniff + parse pair; new banks slot in here
