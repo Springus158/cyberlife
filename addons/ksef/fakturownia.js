@@ -160,11 +160,21 @@ export async function fetchFakturowniaInfo(deps, company) {
   return info;
 }
 
-export async function fvSetPaid({ http }, company, fvId, paid, paidDate) {
-  return fvRequest(http, company, `/invoices/${fvId}.json`, {
-    method: 'PUT',
-    body: { invoice: paid ? { status: 'paid', paid_date: paidDate } : { status: 'issued', paid_date: '' } },
-  });
+export async function fvSetPaid({ http, cl }, company, fvId, paid, paidDate) {
+  try {
+    return await fvRequest(http, company, `/invoices/${fvId}.json`, {
+      method: 'PUT',
+      body: { invoice: paid ? { status: 'paid', paid_date: paidDate } : { status: 'issued', paid_date: '' } },
+    });
+  } catch (err) {
+    // Documents already submitted to KSeF reject full edits (422); the
+    // status-only endpoint still works for them
+    if (!/422/.test(String(err?.message || err))) throw err;
+    cl?.log?.('fvSetPaid: PUT rejected (KSeF-locked document), using change_status:', err.message);
+    return fvRequest(http, company, `/invoices/${fvId}/change_status.json?status=${paid ? 'paid' : 'issued'}`, {
+      method: 'POST',
+    });
+  }
 }
 
 function isSale(f) {
