@@ -409,7 +409,7 @@ export function createStore(cl) {
   // entries: {key, name, sha256, account, currency, period, months: []}) ----
 
   function stmtFiles(companyId) {
-    return cache[`stmts:${companyId}`] || [];
+    return partsOf(`stmts:${companyId}`).flatMap((k) => cache[k] || []);
   }
 
   async function addStmtFile(companyId, rec) {
@@ -417,7 +417,7 @@ export function createStore(cl) {
     if (list.some((e) => e.sha256 === rec.sha256)) return false;
     list.push(rec);
     list.sort((a, b) => String(b.months?.[0] || '').localeCompare(String(a.months?.[0] || '')));
-    await put(`stmts:${companyId}`, list);
+    await writeParts(`stmts:${companyId}`, list);
     return true;
   }
 

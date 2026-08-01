@@ -37,6 +37,31 @@ export async function saveFvPdfToArchive(deps, company, inv) {
   return rec;
 }
 
+// Archive the original statement PDF next to its parsed transactions —
+// the accountant email attaches originals from here
+export async function archiveStatementOriginal(deps, company, dataBase64, name, st) {
+  const { store } = deps;
+  const bytes = Uint8Array.from(atob(dataBase64), (c) => c.charCodeAt(0));
+  const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+    .map((b) => b.toString(16).padStart(2, '0')).join('');
+  if (store.stmtFiles(company.id).some((e) => e.sha256 === sha)) return { archived: false, duplicate: true };
+  let months = [...new Set((st?.txs || []).map((t) => t.date.slice(0, 7)))].sort();
+  if (!months.length) {
+    // Empty statements (unused VAT account) still belong to the month in
+    // their period header — never to "always"
+    const m = /(\d{2})\.(\d{2})\.(\d{4})/.exec(st?.period || '');
+    if (m) months = [`${m[3]}-${m[2]}`];
+  }
+  const safe = String(name || 'wyciag.pdf').normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 70);
+  const key = `statements/${(months[0] || 'inne').slice(0, 4)}/${sha.slice(0, 12)}-${safe}`;
+  await deps.cl.putDataFile(key, dataBase64);
+  await store.addStmtFile(company.id, {
+    key, name, sha256: sha, account: st?.account || '', currency: st?.currency || '',
+    period: st?.period || '', months, ops: st ? st.txs.length : null,
+  });
+  return { archived: true, key };
+}
+
 // Every sales invoice mirrored from Fakturownia should carry its PDF in
 // the archive; runs bounded so a routine sync never stalls on a large
 // backlog — the remainder is picked up by the next run

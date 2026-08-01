@@ -155,13 +155,14 @@
     },
     {
       "name": "import_statement",
-      "description": "Import a bank statement PDF (base64): parses (iPKO Biznes / iPKO history), buckets operations into their months, keeps existing assignments, auto-matches new operations against invoices.",
+      "description": "Import a bank statement PDF (base64): parses (iPKO Biznes / iPKO history), archives the ORIGINAL PDF in the statement registry, buckets operations into their months, keeps existing assignments, auto-matches new operations against invoices.",
       "schema": {
         "type": "object",
         "required": ["dataBase64"],
         "properties": {
           "company": { "type": "string" },
-          "dataBase64": { "type": "string", "description": "The statement PDF, base64-encoded" }
+          "dataBase64": { "type": "string", "description": "The statement PDF, base64-encoded" },
+          "name": { "type": "string", "description": "Original file name (for the archive)" }
         }
       }
     },

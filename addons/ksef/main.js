@@ -11,7 +11,7 @@ import {
 import { renderBankPage, bankOnKey } from './bank-page.js';
 import { renderFilesPage, filesOnKey } from './files-page.js';
 import { renderFvPage, fvOnKey } from './fv-page.js';
-import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid, backfillFvSalePdfs } from './service.js';
+import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid, backfillFvSalePdfs, archiveStatementOriginal } from './service.js';
 import { importFromFakturownia, fakturowniaMode, fvUpdateClientBankAccount } from './fakturownia.js';
 import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { extractFields, matchFileToInvoice } from './files.js';
@@ -323,7 +323,12 @@ export default async function activate(cl) {
     const company = resolveCompany(args.company);
     const text = await cl.pdfText(args.dataBase64);
     const stmt = parseStatement(text);
-    if (!stmt.txs.length) return { account: stmt.account, period: stmt.period, imported: 0, note: 'statement has no operations' };
+    const original = await archiveStatementOriginal(deps, company, args.dataBase64, args.name || `wyciag-${stmt.account.slice(-4)}-${stmt.period.replace(/[^\d.]+/g, '_')}.pdf`, stmt)
+      .catch((err) => {
+        cl.log('import_statement: original archive failed:', err);
+        return { archived: false, error: String(err?.message || err) };
+      });
+    if (!stmt.txs.length) return { account: stmt.account, period: stmt.period, imported: 0, original, note: 'statement has no operations (archived anyway)' };
     const invoices = store.listInvoices({ companyId: company.id });
     const byMonth = new Map();
     for (const tx of stmt.txs) {
@@ -354,7 +359,7 @@ export default async function activate(cl) {
       months[mo] = { total: list.length, added, matched: list.filter((t) => t.invoiceId).length };
     }
     if (bankEl) renderBankPage(bankEl, deps);
-    return { bank: stmt.bank, account: stmt.account, currency: stmt.currency, period: stmt.period, months };
+    return { bank: stmt.bank, account: stmt.account, currency: stmt.currency, period: stmt.period, months, original };
   });
 
   cl.registerAgentTool('add_invoice_file', async (args) => {
