@@ -26,6 +26,7 @@
       "icon": "🧾",
       "pages": [
         { "id": "invoices", "label": "Faktury", "icon": "🧾" },
+        { "id": "clients", "label": "Klienci", "icon": "👥" },
         { "id": "bank", "label": "Wyciągi", "icon": "🏦" }
       ]
     }

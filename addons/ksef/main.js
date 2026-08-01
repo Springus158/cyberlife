@@ -4,7 +4,8 @@
 
 import { createStore, normalizeNip, assertDate } from './store.js';
 import {
-  renderPage, pageOnKey, renderTodayWidget, renderUnpaidWidget, renderSettings,
+  renderPage, pageOnKey, renderClientsPage, clientsOnKey,
+  renderTodayWidget, renderUnpaidWidget, renderSettings,
 } from './page.js';
 import { renderBankPage, bankOnKey } from './bank-page.js';
 import { syncCompany, createInvoice, sendToKsef, setPaid } from './service.js';
@@ -16,6 +17,7 @@ export default async function activate(cl) {
   const deps = { cl, http: cl.http.bind(cl), store };
 
   let pageEl = null;
+  let clientsEl = null;
   let bankEl = null;
   cl.registerModule({
     id: 'main',
@@ -32,6 +34,18 @@ export default async function activate(cl) {
         },
         onKey(e) {
           return pageEl ? pageOnKey(e, pageEl, deps) : false;
+        },
+      },
+      {
+        id: 'clients',
+        label: 'Klienci',
+        icon: '👥',
+        render(el) {
+          clientsEl = el;
+          renderClientsPage(el, deps);
+        },
+        onKey(e) {
+          return clientsEl ? clientsOnKey(e, clientsEl, deps) : false;
         },
       },
       {
@@ -164,6 +178,7 @@ export default async function activate(cl) {
     // The page elements belong to the host and are removed on deactivate;
     // keeping the references would have agent tools render into detached nodes
     pageEl = null;
+    clientsEl = null;
     bankEl = null;
   };
 }

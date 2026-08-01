@@ -243,19 +243,19 @@ const view = {
   selected: 0,
   clientIdx: 0,
   clientTab: 'fv',
+  clientQuery: '',
   mode: 'month',
   month: currentMonth(),
   from: '',
   to: '',
 };
 
-const TAB_ORDER = ['sale', 'cost', 'clients'];
+const TAB_ORDER = ['sale', 'cost'];
 
 function switchTab(el, deps, dir) {
   if (view.dir === dir) return;
   view.dir = dir;
   view.selected = 0;
-  view.clientIdx = 0;
   view.query = '';
   renderPage(el, deps);
 }
@@ -269,9 +269,16 @@ function cycleTab(el, deps, step) {
 
 function tabsHtml() {
   return `<div class="ksefad-tabs">
-    ${[['sale', 'Przychody'], ['cost', 'Wydatki'], ['clients', 'Klienci']].map(([d, l]) =>
+    ${[['sale', 'Przychody'], ['cost', 'Wydatki']].map(([d, l]) =>
       `<button class="ksefad-tab ${view.dir === d ? 'active' : ''}" data-dir="${d}">${l}</button>`).join('')}
   </div>`;
+}
+
+// The detail/create overlays are shared between the Faktury and Klienci
+// pages — after an action they refresh whichever page they were opened from
+function refresh(el, deps) {
+  if (el.dataset.ksefadPage === 'clients') renderClientsPage(el, deps);
+  else renderPage(el, deps);
 }
 
 function bindShellControls(el, deps) {
@@ -306,10 +313,6 @@ export function renderPage(el, deps) {
   injectStyle();
   const { store } = deps;
   const companies = store.companies();
-  if (companies.length && view.dir === 'clients') {
-    renderClientsPage(el, deps);
-    return;
-  }
   if (!companies.length) {
     el.innerHTML = `
       <div class="ksefad">
@@ -406,8 +409,8 @@ function clientsFor(store) {
     }
   }
   let out = [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-  if (view.query) {
-    const q = view.query.toLowerCase();
+  if (view.clientQuery) {
+    const q = view.clientQuery.toLowerCase();
     out = out.filter((c) => `${c.name} ${c.nip}`.toLowerCase().includes(q));
   }
   return out;
@@ -485,9 +488,19 @@ function clientDetailHtml(store, client) {
     <div id="ksefadClientBody">${body}</div>`;
 }
 
-function renderClientsPage(el, deps) {
+export function renderClientsPage(el, deps) {
+  injectStyle();
+  el.dataset.ksefadPage = 'clients';
   const { store } = deps;
   const companies = store.companies();
+  if (!companies.length) {
+    el.innerHTML = `
+      <div class="ksefad">
+        <h2>👥 Klienci</h2>
+        <p>Brak skonfigurowanych firm — dodaj firmę w <b>Settings → Addons → KSeF</b>.</p>
+      </div>`;
+    return;
+  }
   const clients = clientsFor(store);
   view.clientIdx = Math.min(view.clientIdx, Math.max(0, clients.length - 1));
   const sel = clients[view.clientIdx] || null;
@@ -501,12 +514,11 @@ function renderClientsPage(el, deps) {
   el.innerHTML = `
     <div class="ksefad">
       <div class="ksefad-bar">
-        ${tabsHtml()}
-        <select id="ksefadCompany">
+        <select id="ksefadClientCompany">
           <option value="">Wszystkie firmy</option>
           ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === view.companyId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
         </select>
-        <input id="ksefadQuery" placeholder="szukaj klienta… (/)" value="${esc(view.query)}" style="flex:1; min-width:120px">
+        <input id="ksefadClientQuery" placeholder="szukaj klienta… (/)" value="${esc(view.clientQuery)}" style="flex:1; min-width:120px">
         ${canRefresh ? `<button class="ksefad-btn" id="ksefadClientsRefresh" ${view.busy ? 'disabled' : ''}>${view.busy === 'clients' ? 'Odświeżam…' : '⟳ Odśwież z Fakturowni'}</button>` : ''}
         ${canAdd ? '<button class="ksefad-btn primary" id="ksefadClientAdd">+ Nowy klient (n)</button>' : ''}
       </div>
@@ -521,16 +533,33 @@ function renderClientsPage(el, deps) {
         </div>
         <div class="ksefad-clients-detail">${clientDetailHtml(store, sel)}</div>
       </div>
-      <div class="ksefad-muted">${clients.length} klientów · h/l lub Tab: zakładki · j/k klient · d/f/w: dane/faktury/wydatki</div>
+      <div class="ksefad-muted">${clients.length} klientów · j/k klient · d/f/w: dane/faktury/wydatki</div>
     </div>`;
 
-  bindShellControls(el, deps);
+  const company = el.querySelector('#ksefadClientCompany');
+  company.onchange = (e) => {
+    view.companyId = e.target.value;
+    view.clientIdx = 0;
+    renderClientsPage(el, deps);
+  };
+  const query = el.querySelector('#ksefadClientQuery');
+  // Re-rendering replaces the input the user is typing into, so focus and
+  // caret have to be put back or only the first keystroke ever lands
+  query.oninput = (e) => {
+    view.clientQuery = e.target.value;
+    view.clientIdx = 0;
+    const caret = e.target.selectionStart;
+    renderClientsPage(el, deps);
+    const next = el.querySelector('#ksefadClientQuery');
+    next.focus();
+    next.setSelectionRange(caret, caret);
+  };
   el.querySelectorAll('.ksefad-clients-list .row').forEach((row) => {
-    row.onclick = () => { view.clientIdx = Number(row.dataset.idx); renderPage(el, deps); };
+    row.onclick = () => { view.clientIdx = Number(row.dataset.idx); renderClientsPage(el, deps); };
   });
   el.querySelector('.ksefad-clients-list .row.sel')?.scrollIntoView({ block: 'nearest' });
   el.querySelectorAll('.ksefad-subtab').forEach((btn) => {
-    btn.onclick = () => { view.clientTab = btn.dataset.subtab; renderPage(el, deps); };
+    btn.onclick = () => { view.clientTab = btn.dataset.subtab; renderClientsPage(el, deps); };
   });
   el.querySelectorAll('[data-inv-id]').forEach((row) => {
     row.onclick = () => openDetail(el, deps, row.dataset.invId);
@@ -538,7 +567,7 @@ function renderClientsPage(el, deps) {
   el.querySelector('#ksefadClientsRefresh')?.addEventListener('click', async () => {
     view.busy = 'clients';
     view.error = '';
-    renderPage(el, deps);
+    renderClientsPage(el, deps);
     for (const c of scoped.filter((x) => fakturowniaMode(x) === 'dual')) {
       try {
         await fetchFakturowniaClients(deps, c);
@@ -548,7 +577,7 @@ function renderClientsPage(el, deps) {
       }
     }
     view.busy = '';
-    renderPage(el, deps);
+    renderClientsPage(el, deps);
   });
   el.querySelector('#ksefadClientAdd')?.addEventListener('click', () => openClientForm(el, deps, editableCompany));
   el.querySelector('#ksefadClientEdit')?.addEventListener('click', () => {
@@ -598,7 +627,7 @@ function openClientForm(el, deps, company, client = {}) {
       phone: val('#kcPhone'),
     }]);
     close();
-    renderPage(el, deps);
+    renderClientsPage(el, deps);
   };
 }
 
@@ -718,7 +747,7 @@ function openDetail(el, deps, id) {
       e.target.disabled = false;
       alert(`Nie udało się zmienić statusu płatności: ${err.message || err}`);
     }
-    renderPage(el, deps);
+    refresh(el, deps);
   });
   overlay.querySelector('#ksefadPrint')?.addEventListener('click', () => printInvoice(deps, company, store.getInvoice(id)));
   overlay.querySelector('#ksefadCheck')?.addEventListener('click', async (e) => {
@@ -735,7 +764,7 @@ function openDetail(el, deps, id) {
       e.target.textContent = 'Sprawdź status KSeF';
       alert(`Status check failed: ${err.message || err}`);
     }
-    renderPage(el, deps);
+    refresh(el, deps);
   });
   overlay.querySelector('#ksefadSend')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
@@ -748,7 +777,7 @@ function openDetail(el, deps, id) {
       e.target.textContent = 'Wyślij do KSeF';
       alert(`KSeF send failed: ${err.message || err}`);
     }
-    renderPage(el, deps);
+    refresh(el, deps);
   });
 }
 
@@ -1023,7 +1052,7 @@ export function pageOnKey(e, el, deps) {
     case '/': el.querySelector('#ksefadQuery')?.focus(); e.preventDefault(); return true;
     case '[':
     case ']':
-      if (view.dir !== 'clients' && view.mode === 'month') {
+      if (view.mode === 'month') {
         view.month = monthAdd(view.month, e.key === '[' ? -1 : 1);
         view.selected = 0;
         renderPage(el, deps);
@@ -1031,19 +1060,6 @@ export function pageOnKey(e, el, deps) {
       }
       break;
     default: break;
-  }
-
-  if (view.dir === 'clients') {
-    const clients = clientsFor(deps.store);
-    switch (e.key) {
-      case 'j': view.clientIdx = Math.min(view.clientIdx + 1, Math.max(0, clients.length - 1)); renderPage(el, deps); return true;
-      case 'k': view.clientIdx = Math.max(view.clientIdx - 1, 0); renderPage(el, deps); return true;
-      case 'd': view.clientTab = 'dane'; renderPage(el, deps); return true;
-      case 'f': view.clientTab = 'fv'; renderPage(el, deps); return true;
-      case 'w': view.clientTab = 'wyd'; renderPage(el, deps); return true;
-      case 'n': el.querySelector('#ksefadClientAdd')?.click(); return true;
-      default: return false;
-    }
   }
 
   const period = periodOf(view);
@@ -1066,6 +1082,34 @@ export function pageOnKey(e, el, deps) {
     case 'r':
       if (!view.busy) runSync(el, deps);
       return true;
+    default: return false;
+  }
+}
+
+export function clientsOnKey(e, el, deps) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  const overlay = document.querySelector('.ksefad-overlay');
+  if (overlay) {
+    if (e.key === 'Escape') {
+      overlay.remove();
+      return true;
+    }
+    return false;
+  }
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
+  if (!deps.store.companies().length) return false;
+
+  const clients = clientsFor(deps.store);
+  switch (e.key) {
+    case '/': el.querySelector('#ksefadClientQuery')?.focus(); e.preventDefault(); return true;
+    case 'j': view.clientIdx = Math.min(view.clientIdx + 1, Math.max(0, clients.length - 1)); renderClientsPage(el, deps); return true;
+    case 'k': view.clientIdx = Math.max(view.clientIdx - 1, 0); renderClientsPage(el, deps); return true;
+    case 'd': view.clientTab = 'dane'; renderClientsPage(el, deps); return true;
+    case 'f': view.clientTab = 'fv'; renderClientsPage(el, deps); return true;
+    case 'w': view.clientTab = 'wyd'; renderClientsPage(el, deps); return true;
+    case 'n': el.querySelector('#ksefadClientAdd')?.click(); return true;
+    case 'r': el.querySelector('#ksefadClientsRefresh')?.click(); return true;
     default: return false;
   }
 }
