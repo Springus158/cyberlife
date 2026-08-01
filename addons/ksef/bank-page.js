@@ -393,6 +393,7 @@ function openTxDetail(el, deps, company, tx) {
             ${tx.category ? `· kategoria: <b>${esc(tx.category)}</b>` : ''}</div>`}
       </div>
       <div class="adk-actions">
+        ${inv && /do weryfikacji/.test(tx.matchedBy || '') ? '<button class="adk-btn primary" id="txVerify">✓ Zweryfikuj przypisanie</button>' : ''}
         ${inv ? `<button class="adk-btn" id="txUnassign">Odepnij fakturę</button>`
           : `<button class="adk-btn primary" id="txAssign">Przypisz fakturę</button>`}
         <span style="flex:1"></span>
@@ -406,6 +407,14 @@ function openTxDetail(el, deps, company, tx) {
   overlay.querySelector('#txAssign')?.addEventListener('click', () => {
     close();
     openAssignModal(el, deps, company, tx);
+  });
+  // Confirming turns the tentative auto-match into a manual-grade one, so
+  // "Dopasuj ponownie" will never move it again
+  overlay.querySelector('#txVerify')?.addEventListener('click', async () => {
+    const verified = `${(tx.matchedBy || '').replace(/\s*\(do weryfikacji\)/, '')} (zweryfikowane)`;
+    await patchTx(store, company, tx, { matchedBy: verified, auto: false });
+    close();
+    renderBankPage(el, deps);
   });
   overlay.querySelector('#txUnassign')?.addEventListener('click', async () => {
     await patchTx(store, company, tx, { invoiceId: '', matchedBy: '', auto: false });
