@@ -11,6 +11,15 @@ function isSale(f) {
   return String(f.income) === '1' || f.income === true;
 }
 
+// status alone misses accounts that record the payment amount without
+// flipping the status, so a fully covered gross also counts as paid
+function isPaid(f) {
+  if (f.status === 'paid') return true;
+  const paid = Number(f.paid);
+  const gross = Number(f.price_gross);
+  return Number.isFinite(paid) && Number.isFinite(gross) && gross > 0 && paid >= gross;
+}
+
 // Cash documents, drafts and notes that Fakturownia keeps in the same
 // endpoint but which are not invoices in any accounting sense
 const SKIPPED_KINDS = new Set(['kp', 'kw', 'estimate', 'client_order', 'correction_note', 'accounting_note']);
@@ -42,7 +51,7 @@ function mapInvoice(f, company) {
     vat: Number(f.price_tax) || 0,
     gross: Number(f.price_gross) || 0,
     currency: f.currency || 'PLN',
-    paid: f.status === 'paid',
+    paid: isPaid(f),
     paidDate: f.paid_date || '',
     kind: f.kind || 'vat',
   };

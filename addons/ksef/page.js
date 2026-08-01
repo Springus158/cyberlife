@@ -21,6 +21,10 @@ function injectStyle() {
   style.textContent = `
     .ksefad { display:flex; flex-direction:column; gap:10px; height:100%; font-size: var(--fs-base, 13px); }
     .ksefad-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .ksefad-tabs { display:flex; gap:2px; }
+    .ksefad-tab { background:transparent; border:1px solid var(--border,#334155); color:inherit;
+      border-radius:6px 6px 0 0; border-bottom:none; padding:6px 16px; cursor:pointer; font:inherit; opacity:.6; }
+    .ksefad-tab.active { opacity:1; border-color:#3b82f6; color:#3b82f6; font-weight:600; }
     .ksefad-bar select, .ksefad-bar input, .ksefad select, .ksefad input, .ksefad textarea {
       background: var(--bg-input, #1e293b); color: inherit; border: 1px solid var(--border, #334155);
       border-radius: 6px; padding: 5px 8px; font: inherit; }
@@ -60,13 +64,20 @@ function injectStyle() {
 
 const view = {
   companyId: '',
-  dir: '',
+  dir: 'sale',
   unpaid: false,
   query: '',
   busy: '',
   error: '',
   selected: 0,
 };
+
+function switchTab(el, deps, dir) {
+  if (view.dir === dir) return;
+  view.dir = dir;
+  view.selected = 0;
+  renderPage(el, deps);
+}
 
 // ---- module page ----
 
@@ -96,14 +107,13 @@ export function renderPage(el, deps) {
   el.innerHTML = `
     <div class="ksefad">
       <div class="ksefad-bar">
+        <div class="ksefad-tabs">
+          <button class="ksefad-tab ${view.dir === 'sale' ? 'active' : ''}" data-dir="sale">Przychody</button>
+          <button class="ksefad-tab ${view.dir === 'cost' ? 'active' : ''}" data-dir="cost">Wydatki</button>
+        </div>
         <select id="ksefadCompany">
           <option value="">All companies</option>
           ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === view.companyId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-        </select>
-        <select id="ksefadDir">
-          <option value="">Sales + costs</option>
-          <option value="sale" ${view.dir === 'sale' ? 'selected' : ''}>Sales</option>
-          <option value="cost" ${view.dir === 'cost' ? 'selected' : ''}>Costs</option>
         </select>
         <label><input type="checkbox" id="ksefadUnpaid" ${view.unpaid ? 'checked' : ''}> unpaid</label>
         <input id="ksefadQuery" placeholder="search… (/)" value="${esc(view.query)}" style="flex:1; min-width:120px">
@@ -113,7 +123,7 @@ export function renderPage(el, deps) {
       ${view.error ? `<div class="ksefad-error">${esc(view.error)}</div>` : ''}
       <div class="ksefad-scroll">
         <table class="ksefad-table">
-          <thead><tr><th>Number</th><th>Date</th><th>Contractor</th><th>Gross</th><th></th><th>Status</th><th>KSeF</th></tr></thead>
+          <thead><tr><th>Number</th><th>Date</th><th>Contractor</th><th>Gross</th><th>Status</th><th>KSeF</th></tr></thead>
           <tbody>
             ${invoices.map((inv, i) => `
               <tr data-id="${esc(inv.id)}" class="${i === view.selected ? 'sel' : ''}">
@@ -121,7 +131,6 @@ export function renderPage(el, deps) {
                 <td>${esc(inv.issueDate)}</td>
                 <td>${esc(inv.dir === 'sale' ? inv.buyerName : inv.sellerName)}</td>
                 <td style="text-align:right">${zl(inv.gross, inv.currency)}</td>
-                <td><span class="ksefad-badge ${inv.dir}">${inv.dir}</span></td>
                 <td>${inv.kind === 'proforma' ? '<span class="ksefad-muted">proforma</span>'
                   : `<span class="ksefad-badge ${inv.paid ? 'paid' : 'unpaid'}">${inv.paid ? 'paid' : 'unpaid'}</span>`}</td>
                 <td class="ksefad-muted">${inv.ksefNumber ? '✓' : (inv.sendState === 'error' ? '⚠' : '—')}</td>
@@ -130,12 +139,14 @@ export function renderPage(el, deps) {
         </table>
         ${invoices.length ? '' : '<p class="ksefad-muted" style="padding:12px">No invoices match. Run the Fakturownia import (Settings) or Sync KSeF.</p>'}
       </div>
-      <div class="ksefad-muted">${invoices.length} shown · j/k select · Enter open · n new · r sync</div>
+      <div class="ksefad-muted">${invoices.length} shown · h/l lub Tab: przychody/wydatki · j/k select · Enter open · n new · r sync</div>
     </div>`;
 
   const rerender = () => renderPage(el, deps);
+  el.querySelectorAll('.ksefad-tab').forEach((btn) => {
+    btn.onclick = () => switchTab(el, deps, btn.dataset.dir);
+  });
   el.querySelector('#ksefadCompany').onchange = (e) => { view.companyId = e.target.value; rerender(); };
-  el.querySelector('#ksefadDir').onchange = (e) => { view.dir = e.target.value; rerender(); };
   el.querySelector('#ksefadUnpaid').onchange = (e) => { view.unpaid = e.target.checked; rerender(); };
   // Re-rendering replaces the input the user is typing into, so focus and
   // caret have to be put back or only the first keystroke ever lands
@@ -467,6 +478,12 @@ export function pageOnKey(e, el, deps) {
     limit: 300,
   });
   switch (e.key) {
+    case 'h': switchTab(el, deps, 'sale'); return true;
+    case 'l': switchTab(el, deps, 'cost'); return true;
+    case 'Tab':
+      e.preventDefault();
+      switchTab(el, deps, view.dir === 'sale' ? 'cost' : 'sale');
+      return true;
     case 'j': view.selected = Math.min(view.selected + 1, invoices.length - 1); renderPage(el, deps); return true;
     case 'k': view.selected = Math.max(view.selected - 1, 0); renderPage(el, deps); return true;
     case 'Enter':
