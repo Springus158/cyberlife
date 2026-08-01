@@ -79,8 +79,104 @@ export function parseIpkoStatement(text) {
   return { bank: 'PKO BP (iPKO Biznes)', account, currency, period, stmtNo, txs };
 }
 
+// iPKO "HISTORIA BIEŻĄCA" export (account history print, not a formal
+// statement): two head lines per operation — date + title + type + amount,
+// then value date + balance — followed by detail lines
+// Money amounts group thousands with a SINGLE space — a looser digit
+// pattern would swallow reference numbers standing before the amount
+const HIST_AMOUNT = String.raw`-?\d{1,3}(?: \d{3})*,\d{2}`;
+const HIST_HEAD_RE = new RegExp(`^(\\d{4}-\\d{2}-\\d{2})\\s{2,}(.*?)\\s{2,}(${HIST_AMOUNT}) (PLN|EUR|USD|GBP|CHF)$`);
+const HIST_SECOND_RE = new RegExp(`^(\\d{4}-\\d{2}-\\d{2})\\s{2,}(.*?)\\s*(${HIST_AMOUNT}) (?:PLN|EUR|USD|GBP|CHF)$`);
+
+export function parseIpkoHistory(text) {
+  let account = '';
+  let currency = 'PLN';
+  let from = '';
+  let to = '';
+  const txs = [];
+  let cur = null;
+  let seq = 0;
+  const flush = () => {
+    if (cur) {
+      const idMatch = /Identyfikator transakcji:\s*(\d+)/.exec(cur.descLines.join(' '))
+        || /Numer referencyjny:\s*(\S+)/.exec(cur.descLines.join(' '));
+      cur.id = idMatch ? idMatch[1] : `${cur.date}:${cur.amount}:${cur.saldo}`;
+      cur.desc = cur.descLines.join(' ').replace(/\s+/g, ' ').trim();
+      delete cur.descLines;
+      txs.push(cur);
+    }
+    cur = null;
+  };
+  for (const line of text.split('\n')) {
+    const acc = /Rachunek:\s*.*?((?:\d[ ]?){26})/.exec(line);
+    if (acc) {
+      account = acc[1].replace(/\s/g, '');
+      continue;
+    }
+    const f = /Data operacji od:\s*(\d{4}-\d{2}-\d{2})/.exec(line);
+    if (f) from = f[1];
+    const t = /Data operacji do:\s*(\d{4}-\d{2}-\d{2})/.exec(line);
+    if (t) to = t[1];
+    const head = HIST_HEAD_RE.exec(line.trimEnd());
+    if (head && cur === null) {
+      const mid = head[2].split(/\s{2,}/);
+      cur = {
+        seq: seq++,
+        date: head[1],
+        valueDate: '',
+        type: mid.length > 1 ? mid[mid.length - 1].trim() : '',
+        amount: plAmount(head[3]),
+        saldo: null,
+        descLines: mid.length ? [mid[0].trim()] : [],
+      };
+      currency = head[4];
+      continue;
+    }
+    if (cur && cur.saldo === null) {
+      const second = HIST_SECOND_RE.exec(line.trimEnd())
+        || /^(\d{4}-\d{2}-\d{2})\s*$/.exec(line.trim());
+      if (second) {
+        cur.valueDate = second[1];
+        if (second[3] !== undefined) cur.saldo = plAmount(second[3]);
+        else cur.saldo = 0;
+        if (second[2]) cur.descLines.push(second[2].trim());
+        continue;
+      }
+    }
+    if (cur) {
+      const nextHead = HIST_HEAD_RE.exec(line.trimEnd());
+      if (nextHead) {
+        flush();
+        const mid = nextHead[2].split(/\s{2,}/);
+        cur = {
+          seq: seq++,
+          date: nextHead[1],
+          valueDate: '',
+          type: mid.length > 1 ? mid[mid.length - 1].trim() : '',
+          amount: plAmount(nextHead[3]),
+          saldo: null,
+          descLines: mid.length ? [mid[0].trim()] : [],
+        };
+        continue;
+      }
+      const s = line.trim();
+      if (s && !/^Strona \d|^Dokument elektroniczny|^Powszechna Kasa|^www\./.test(s)) cur.descLines.push(s);
+    }
+  }
+  flush();
+  return {
+    bank: 'PKO BP (historia iPKO)',
+    account,
+    currency,
+    period: from && to ? `${from} – ${to}` : '',
+    stmtNo: '',
+    txs,
+  };
+}
+
 // Every parser gets a sniff + parse pair; new banks slot in here
 const PARSERS = [
+  { sniff: (t) => /HISTORIA BIE[Żż][ĄĄa]?CA|HISTORIA RACHUNKU/i.test(t), parse: parseIpkoHistory },
   { sniff: (t) => t.includes('iPKO') || /PKO BP/.test(t) || /Nr rachunku\/karty/.test(t), parse: parseIpkoStatement },
 ];
 
