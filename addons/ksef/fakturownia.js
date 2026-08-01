@@ -89,6 +89,33 @@ export async function fvGovStatus({ http }, company, fvId) {
     `/invoices/${fvId}.json?fields[invoice]=gov_status,gov_id,gov_error_messages,number`);
 }
 
+// Read-only mirror of the Fakturownia client book (dual mode); the local
+// contractors store plays this role when Fakturownia is off
+export async function fetchFakturowniaClients(deps, company, onProgress) {
+  const { http, store } = deps;
+  const out = [];
+  for (let page = 1; page <= 200; page++) {
+    const list = await fvRequest(http, company, `/clients.json?page=${page}&per_page=100`);
+    if (!Array.isArray(list) || list.length === 0) break;
+    for (const c of list) {
+      out.push({
+        fvId: c.id,
+        name: c.name || '',
+        nip: normalizeNip(c.tax_no),
+        address1: [c.street, c.street_no].filter(Boolean).join(' '),
+        address2: [c.post_code, c.city].filter(Boolean).join(' '),
+        email: c.email || '',
+        phone: c.phone || c.mobile_phone || '',
+        note: c.note || '',
+        kind: c.kind || '',
+      });
+    }
+    onProgress?.({ page, total: out.length });
+  }
+  await store.saveClients(company.id, out);
+  return { total: out.length };
+}
+
 // Read-only snapshot of the Fakturownia account: who the seller is there,
 // which numbering patterns the account uses (each account differs — never
 // assume one), plan and volume. Stored for display; editing happens in
@@ -250,6 +277,8 @@ export async function importFromFakturownia({ http, store }, company, onProgress
     await store.setSyncState(company.id, { fakturowniaImportedAt: new Date().toISOString() });
     await fetchFakturowniaInfo({ http, store }, company)
       .catch((err) => console.warn('[addon:ksef] fakturownia account info fetch failed:', err));
+    await fetchFakturowniaClients({ http, store }, company)
+      .catch((err) => console.warn('[addon:ksef] fakturownia clients fetch failed:', err));
   }
   return { total: tally.total, added: tally.added, updated: tally.updated, truncated: tally.truncated };
 }

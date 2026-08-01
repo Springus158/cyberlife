@@ -61,7 +61,8 @@ export function createStore(cl) {
 
   async function deleteCompany(id) {
     for (const key of Object.keys(cache)) {
-      if (key.startsWith(`inv:${id}:`) || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}`) {
+      if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`)
+        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}`) {
         await drop(key);
       }
     }
@@ -143,13 +144,12 @@ export function createStore(cl) {
     return merged;
   }
 
-  // Writes a quarter back, splitting across "#n" parts so no single value
-  // approaches the host's 64KB cap
-  async function writeChunk(prefix, list) {
-    list.sort((a, b) => String(b.issueDate).localeCompare(String(a.issueDate)));
-    // Sizes are exact and incremental: JSON.stringify of an array is
-    // '[' + records joined by ',' + ']', and the cap is UTF-8 bytes (the
-    // host's limit — Polish diacritics take two per character)
+  // Writes a list back under prefix, splitting across "#n" parts so no
+  // single value approaches the host's 64KB cap. Sizes are exact and
+  // incremental: JSON.stringify of an array is '[' + records joined by ','
+  // + ']', and the cap is UTF-8 bytes (the host's limit — Polish
+  // diacritics take two per character)
+  async function writeParts(prefix, list) {
     const parts = [];
     let current = [];
     let currentBytes = 2;
@@ -172,6 +172,11 @@ export function createStore(cl) {
       const index = stale === prefix ? 0 : Number(stale.split('#')[1]) - 1;
       if (index >= parts.length) await drop(stale);
     }
+  }
+
+  async function writeChunk(prefix, list) {
+    list.sort((a, b) => String(b.issueDate).localeCompare(String(a.issueDate)));
+    await writeParts(prefix, list);
   }
 
   async function upsertInvoices(companyId, records) {
@@ -302,6 +307,17 @@ export function createStore(cl) {
     await put(`sync:${companyId}`, { ...syncState(companyId), ...patch });
   }
 
+  // ---- Fakturownia clients (read-only mirror, dual mode) ----
+
+  function fvClients(companyId) {
+    return partsOf(`clients:${companyId}`).flatMap((k) => cache[k] || []);
+  }
+
+  async function saveClients(companyId, list) {
+    const sorted = [...list].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    await writeParts(`clients:${companyId}`, sorted);
+  }
+
   // ---- Fakturownia account snapshot (read-only display) ----
 
   function fvInfo(companyId) {
@@ -329,5 +345,7 @@ export function createStore(cl) {
     setSyncState,
     fvInfo,
     setFvInfo,
+    fvClients,
+    saveClients,
   };
 }

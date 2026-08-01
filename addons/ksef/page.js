@@ -3,12 +3,22 @@
 // Settings section. All rendering is plain DOM into the container the host
 // hands us.
 
-import { importFromFakturownia, fetchFakturowniaInfo, fakturowniaMode } from './fakturownia.js';
+import {
+  importFromFakturownia, fetchFakturowniaInfo, fetchFakturowniaClients, fakturowniaMode,
+} from './fakturownia.js';
 import { syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, clearTokenCache, today } from './service.js';
 import { lineNet, lineVat } from './fa3.js';
+import { normalizeNip } from './store.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const zl = (n, cur = 'PLN') => `${(Number(n) || 0).toFixed(2)} ${cur}`;
+
+function ksefMark(inv) {
+  if (inv.ksefNumber) return `<span class="ksefad-ok" title="${esc(inv.ksefNumber)}">✓</span>`;
+  if (inv.kind === 'proforma') return '<span class="ksefad-muted">—</span>';
+  if (inv.sendState === 'error') return `<span class="ksefad-warn" title="${esc(inv.sendError || 'błąd wysyłki')}">⚠</span>`;
+  return '<span class="ksefad-no" title="brak w KSeF">✗</span>';
+}
 
 function payBadge(inv) {
   if (inv.kind === 'proforma') return '<span class="ksefad-muted">proforma</span>';
@@ -92,6 +102,21 @@ function injectStyle() {
     .ksefad-modal.lg .ksefad-lines input, .ksefad-modal.lg .ksefad-lines select { padding:9px 10px; }
     .ksefad-muted { opacity:.6; }
     .ksefad-error { color:var(--error, #f38ba8); white-space:pre-wrap; }
+    .ksefad-ok { color:var(--success, #a6e3a1); font-weight:700; }
+    .ksefad-no { color:var(--error, #f38ba8); font-weight:700; }
+    .ksefad-warn { color:var(--warning, #f9e2af); font-weight:700; }
+    .ksefad-clients { display:flex; gap:14px; flex:1; min-height:0; }
+    .ksefad-clients-list { width:340px; flex-shrink:0; overflow:auto; border:1px solid var(--border, #45475a);
+      border-radius:8px; }
+    .ksefad-clients-list .row { padding:8px 12px; cursor:pointer; border-bottom:1px solid rgba(128,128,128,.12); }
+    .ksefad-clients-list .row.sel, .ksefad-clients-list .row:hover { background: rgba(137,180,250,.10); }
+    .ksefad-clients-list .row .nm { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .ksefad-clients-detail { flex:1; min-width:0; overflow:auto; border:1px solid var(--border, #45475a);
+      border-radius:8px; padding:16px 20px; }
+    .ksefad-subtabs { display:flex; gap:6px; margin:12px 0; }
+    .ksefad-subtab { background:var(--bg-surface, #313244); border:1px solid var(--border, #45475a);
+      color:inherit; border-radius:6px; padding:6px 14px; cursor:pointer; font:inherit; opacity:.7; }
+    .ksefad-subtab.active { opacity:1; border-color:var(--accent, #89b4fa); color:var(--accent, #89b4fa); font-weight:600; }
     .ksefad-widget { display:flex; flex-direction:column; gap:4px; font-size:.95em; }
     .ksefad-widget-row { display:flex; justify-content:space-between; gap:8px; }
     .ksefad-widget-row span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -112,21 +137,71 @@ const view = {
   busy: '',
   error: '',
   selected: 0,
+  clientIdx: 0,
+  clientTab: 'fv',
 };
+
+const TAB_ORDER = ['sale', 'cost', 'clients'];
 
 function switchTab(el, deps, dir) {
   if (view.dir === dir) return;
   view.dir = dir;
   view.selected = 0;
+  view.clientIdx = 0;
+  view.query = '';
   renderPage(el, deps);
 }
 
+function cycleTab(el, deps, step) {
+  const i = TAB_ORDER.indexOf(view.dir);
+  switchTab(el, deps, TAB_ORDER[(i + step + TAB_ORDER.length) % TAB_ORDER.length]);
+}
+
 // ---- module page ----
+
+function tabsHtml() {
+  return `<div class="ksefad-tabs">
+    ${[['sale', 'Przychody'], ['cost', 'Wydatki'], ['clients', 'Klienci']].map(([d, l]) =>
+      `<button class="ksefad-tab ${view.dir === d ? 'active' : ''}" data-dir="${d}">${l}</button>`).join('')}
+  </div>`;
+}
+
+function bindShellControls(el, deps) {
+  el.querySelectorAll('.ksefad-tab').forEach((btn) => {
+    btn.onclick = () => switchTab(el, deps, btn.dataset.dir);
+  });
+  const company = el.querySelector('#ksefadCompany');
+  if (company) {
+    company.onchange = (e) => {
+      view.companyId = e.target.value;
+      view.selected = 0;
+      view.clientIdx = 0;
+      renderPage(el, deps);
+    };
+  }
+  const query = el.querySelector('#ksefadQuery');
+  if (query) {
+    // Re-rendering replaces the input the user is typing into, so focus and
+    // caret have to be put back or only the first keystroke ever lands
+    query.oninput = (e) => {
+      view.query = e.target.value;
+      const caret = e.target.selectionStart;
+      renderPage(el, deps);
+      const next = el.querySelector('#ksefadQuery');
+      next.focus();
+      next.setSelectionRange(caret, caret);
+    };
+  }
+}
 
 export function renderPage(el, deps) {
   injectStyle();
   const { store } = deps;
   const companies = store.companies();
+  if (companies.length && view.dir === 'clients') {
+    renderClientsPage(el, deps);
+    return;
+  }
   if (!companies.length) {
     el.innerHTML = `
       <div class="ksefad">
@@ -149,10 +224,7 @@ export function renderPage(el, deps) {
   el.innerHTML = `
     <div class="ksefad">
       <div class="ksefad-bar">
-        <div class="ksefad-tabs">
-          <button class="ksefad-tab ${view.dir === 'sale' ? 'active' : ''}" data-dir="sale">Przychody</button>
-          <button class="ksefad-tab ${view.dir === 'cost' ? 'active' : ''}" data-dir="cost">Wydatki</button>
-        </div>
+        ${tabsHtml()}
         <select id="ksefadCompany">
           <option value="">All companies</option>
           ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === view.companyId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
@@ -174,7 +246,7 @@ export function renderPage(el, deps) {
                 <td>${esc(inv.dir === 'sale' ? inv.buyerName : inv.sellerName)}</td>
                 <td style="text-align:right">${zl(inv.gross, inv.currency)}</td>
                 <td>${payBadge(inv)}</td>
-                <td class="ksefad-muted">${inv.ksefNumber ? '✓' : (inv.sendState === 'error' ? '⚠' : '—')}</td>
+                <td style="text-align:center">${ksefMark(inv)}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -194,27 +266,225 @@ export function renderPage(el, deps) {
         </div>` : ''}
     </div>`;
 
-  const rerender = () => renderPage(el, deps);
-  el.querySelectorAll('.ksefad-tab').forEach((btn) => {
-    btn.onclick = () => switchTab(el, deps, btn.dataset.dir);
-  });
-  el.querySelector('#ksefadCompany').onchange = (e) => { view.companyId = e.target.value; rerender(); };
-  el.querySelector('#ksefadUnpaid').onchange = (e) => { view.unpaid = e.target.checked; rerender(); };
-  // Re-rendering replaces the input the user is typing into, so focus and
-  // caret have to be put back or only the first keystroke ever lands
-  el.querySelector('#ksefadQuery').oninput = (e) => {
-    view.query = e.target.value;
-    const caret = e.target.selectionStart;
-    rerender();
-    const next = el.querySelector('#ksefadQuery');
-    next.focus();
-    next.setSelectionRange(caret, caret);
-  };
+  bindShellControls(el, deps);
+  el.querySelector('#ksefadUnpaid').onchange = (e) => { view.unpaid = e.target.checked; renderPage(el, deps); };
   el.querySelector('#ksefadSync').onclick = () => runSync(el, deps);
   el.querySelector('#ksefadNew').onclick = () => openCreateForm(el, deps);
   el.querySelectorAll('tbody tr').forEach((tr, i) => {
     tr.onclick = () => { view.selected = i; openDetail(el, deps, tr.dataset.id); };
   });
+}
+
+// ---- clients tab ----
+
+function clientsFor(store) {
+  const companies = view.companyId
+    ? [store.company(view.companyId)].filter(Boolean)
+    : store.companies();
+  const seen = new Map();
+  for (const c of companies) {
+    const dual = fakturowniaMode(c) === 'dual';
+    const list = dual ? store.fvClients(c.id) : store.contractors(c.id);
+    for (const cl of list) {
+      if (!cl.name || cl.name === '-') continue;
+      const key = normalizeNip(cl.nip) || `n:${cl.name.toLowerCase()}`;
+      if (!seen.has(key)) seen.set(key, { ...cl, nip: normalizeNip(cl.nip), companyId: c.id, readonly: dual });
+    }
+  }
+  let out = [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+  if (view.query) {
+    const q = view.query.toLowerCase();
+    out = out.filter((c) => `${c.name} ${c.nip}`.toLowerCase().includes(q));
+  }
+  return out;
+}
+
+function invoicesForClient(store, client, dir) {
+  const party = (i) => (dir === 'sale' ? { nip: i.buyerNip, name: i.buyerName } : { nip: i.sellerNip, name: i.sellerName });
+  return store.listInvoices({ companyId: view.companyId || undefined, dir }).filter((i) => {
+    const p = party(i);
+    return client.nip ? p.nip === client.nip : (p.name || '').toLowerCase() === client.name.toLowerCase();
+  });
+}
+
+function clientInvoiceTableHtml(list) {
+  if (!list.length) return '<p class="ksefad-muted" style="padding:8px 0">Brak dokumentów.</p>';
+  const sums = {};
+  for (const i of list) {
+    const s = sums[i.currency] || { total: 0, open: 0 };
+    s.total += i.gross;
+    if (!i.paid && i.kind !== 'proforma') s.open += Math.max(0, i.gross - (Number(i.paidAmount) || 0));
+    sums[i.currency] = s;
+  }
+  return `
+    <table class="ksefad-table">
+      <thead><tr><th>Numer</th><th>Data</th><th>Brutto</th><th>Status</th><th>KSeF</th></tr></thead>
+      <tbody>${list.map((i) => `
+        <tr data-inv-id="${esc(i.id)}">
+          <td>${esc(i.number || '—')}</td>
+          <td>${esc(i.issueDate)}</td>
+          <td style="text-align:right">${zl(i.gross, i.currency)}</td>
+          <td>${payBadge(i)}</td>
+          <td style="text-align:center">${ksefMark(i)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    <div class="ksefad-muted" style="margin-top:8px">
+      ${Object.entries(sums).map(([cur, s]) =>
+        `Suma: <b>${zl(s.total, cur)}</b>${s.open > 0 ? ` · do zapłaty: ${zl(s.open, cur)}` : ''}`).join(' · ')}
+    </div>`;
+}
+
+function clientDetailHtml(store, client) {
+  if (!client) return '<p class="ksefad-muted" style="padding:12px">Wybierz klienta z listy.</p>';
+  const sub = view.clientTab;
+  const subtab = (id, label, key) =>
+    `<button class="ksefad-subtab ${sub === id ? 'active' : ''}" data-subtab="${id}">${label} <span class="ksefad-muted">(${key})</span></button>`;
+  let body = '';
+  if (sub === 'dane') {
+    body = `
+      <div class="adk-kv">
+        <div><b>NIP:</b> ${esc(client.nip || '—')}</div>
+        <div><b>Adres:</b> ${esc([client.address1, client.address2].filter(Boolean).join(', ') || '—')}</div>
+        ${client.email ? `<div><b>E-mail:</b> ${esc(client.email)}</div>` : ''}
+        ${client.phone ? `<div><b>Telefon:</b> ${esc(client.phone)}</div>` : ''}
+        ${client.note ? `<div><b>Notatka:</b> ${esc(client.note)}</div>` : ''}
+        <div class="adk-muted">${client.readonly
+          ? 'Dane z Fakturowni — tylko do odczytu, edycja w Fakturowni.'
+          : 'Klient lokalny.'}</div>
+      </div>
+      ${client.readonly ? '' : '<div class="adk-actions"><button class="adk-btn" id="ksefadClientEdit">Edytuj</button></div>'}`;
+  } else {
+    body = clientInvoiceTableHtml(invoicesForClient(store, client, sub === 'fv' ? 'sale' : 'cost'));
+  }
+  return `
+    <div style="display:flex; align-items:baseline; gap:10px">
+      <h3 style="font-size:18px; margin:0">${esc(client.name)}</h3>
+      ${client.nip ? `<span class="ksefad-muted">NIP ${esc(client.nip)}</span>` : ''}
+    </div>
+    <div class="ksefad-subtabs">
+      ${subtab('dane', 'Dane', 'd')}
+      ${subtab('fv', 'Faktury', 'f')}
+      ${subtab('wyd', 'Wydatki', 'w')}
+    </div>
+    <div id="ksefadClientBody">${body}</div>`;
+}
+
+function renderClientsPage(el, deps) {
+  const { store } = deps;
+  const companies = store.companies();
+  const clients = clientsFor(store);
+  view.clientIdx = Math.min(view.clientIdx, Math.max(0, clients.length - 1));
+  const sel = clients[view.clientIdx] || null;
+  const scoped = view.companyId ? [store.company(view.companyId)].filter(Boolean) : companies;
+  const canRefresh = scoped.some((c) => fakturowniaMode(c) === 'dual');
+  const editableCompany = view.companyId
+    ? store.company(view.companyId)
+    : (companies.length === 1 ? companies[0] : null);
+  const canAdd = editableCompany && fakturowniaMode(editableCompany) !== 'dual';
+
+  el.innerHTML = `
+    <div class="ksefad">
+      <div class="ksefad-bar">
+        ${tabsHtml()}
+        <select id="ksefadCompany">
+          <option value="">Wszystkie firmy</option>
+          ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === view.companyId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+        </select>
+        <input id="ksefadQuery" placeholder="szukaj klienta… (/)" value="${esc(view.query)}" style="flex:1; min-width:120px">
+        ${canRefresh ? `<button class="ksefad-btn" id="ksefadClientsRefresh" ${view.busy ? 'disabled' : ''}>${view.busy === 'clients' ? 'Odświeżam…' : '⟳ Odśwież z Fakturowni'}</button>` : ''}
+        ${canAdd ? '<button class="ksefad-btn primary" id="ksefadClientAdd">+ Nowy klient (n)</button>' : ''}
+      </div>
+      ${view.error ? `<div class="ksefad-error">${esc(view.error)}</div>` : ''}
+      <div class="ksefad-clients">
+        <div class="ksefad-clients-list">
+          ${clients.map((c, i) => `
+            <div class="row ${i === view.clientIdx ? 'sel' : ''}" data-idx="${i}">
+              <div class="nm">${esc(c.name)}</div>
+              <div class="ksefad-muted">${c.nip ? `NIP ${esc(c.nip)}` : '—'}</div>
+            </div>`).join('') || '<p class="ksefad-muted" style="padding:12px">Brak klientów. W trybie dual uruchom „Odśwież z Fakturowni".</p>'}
+        </div>
+        <div class="ksefad-clients-detail">${clientDetailHtml(store, sel)}</div>
+      </div>
+      <div class="ksefad-muted">${clients.length} klientów · h/l lub Tab: zakładki · j/k klient · d/f/w: dane/faktury/wydatki</div>
+    </div>`;
+
+  bindShellControls(el, deps);
+  el.querySelectorAll('.ksefad-clients-list .row').forEach((row) => {
+    row.onclick = () => { view.clientIdx = Number(row.dataset.idx); renderPage(el, deps); };
+  });
+  el.querySelector('.ksefad-clients-list .row.sel')?.scrollIntoView({ block: 'nearest' });
+  el.querySelectorAll('.ksefad-subtab').forEach((btn) => {
+    btn.onclick = () => { view.clientTab = btn.dataset.subtab; renderPage(el, deps); };
+  });
+  el.querySelectorAll('[data-inv-id]').forEach((row) => {
+    row.onclick = () => openDetail(el, deps, row.dataset.invId);
+  });
+  el.querySelector('#ksefadClientsRefresh')?.addEventListener('click', async () => {
+    view.busy = 'clients';
+    view.error = '';
+    renderPage(el, deps);
+    for (const c of scoped.filter((x) => fakturowniaMode(x) === 'dual')) {
+      try {
+        await fetchFakturowniaClients(deps, c);
+      } catch (err) {
+        deps.cl.log('clients refresh failed:', err);
+        view.error = `${c.name}: ${err.message || err}`;
+      }
+    }
+    view.busy = '';
+    renderPage(el, deps);
+  });
+  el.querySelector('#ksefadClientAdd')?.addEventListener('click', () => openClientForm(el, deps, editableCompany));
+  el.querySelector('#ksefadClientEdit')?.addEventListener('click', () => {
+    if (sel && !sel.readonly) openClientForm(el, deps, store.company(sel.companyId) || editableCompany, sel);
+  });
+}
+
+function openClientForm(el, deps, company, client = {}) {
+  const { store } = deps;
+  const overlay = document.createElement('div');
+  // modal-overlay is what the host's Esc handling and hasOpenModal() look for
+  overlay.className = 'ksefad-overlay modal-overlay';
+  overlay.innerHTML = `
+    <div class="ksefad-modal lg" style="width:min(640px, 92vw)">
+      <h2 style="margin-bottom:18px">${client.name ? 'Edytuj klienta' : 'Nowy klient'}</h2>
+      <div class="adk-form">
+        <label class="adk-field"><span>Nazwa</span><input id="kcName" value="${esc(client.name || '')}"></label>
+        <label class="adk-field"><span>NIP</span><input id="kcNip" value="${esc(client.nip || '')}"></label>
+        <label class="adk-field"><span>Ulica i nr</span><input id="kcAddr1" value="${esc(client.address1 || '')}"></label>
+        <label class="adk-field"><span>Kod i miejscowość</span><input id="kcAddr2" value="${esc(client.address2 || '')}"></label>
+        <label class="adk-field"><span>E-mail</span><input id="kcEmail" value="${esc(client.email || '')}"></label>
+        <label class="adk-field"><span>Telefon</span><input id="kcPhone" value="${esc(client.phone || '')}"></label>
+      </div>
+      <div class="adk-actions">
+        <span class="ksefad-error" id="kcError"></span>
+        <span style="flex:1"></span>
+        <button class="adk-btn primary" id="kcSave">Zapisz</button>
+        <button class="adk-btn" id="kcCancel">Anuluj</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('#kcCancel').onclick = close;
+  overlay.querySelector('#kcSave').onclick = async () => {
+    const val = (id) => overlay.querySelector(id).value.trim();
+    if (!val('#kcName')) {
+      overlay.querySelector('#kcError').textContent = 'Nazwa jest wymagana';
+      return;
+    }
+    await store.upsertContractors(company.id, [{
+      name: val('#kcName'),
+      nip: val('#kcNip'),
+      address1: val('#kcAddr1'),
+      address2: val('#kcAddr2'),
+      email: val('#kcEmail'),
+      phone: val('#kcPhone'),
+    }]);
+    close();
+    renderPage(el, deps);
+  };
 }
 
 async function runSync(el, deps) {
@@ -629,6 +899,28 @@ export function pageOnKey(e, el, deps) {
   const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
   if (!deps.store.companies().length) return false;
+
+  switch (e.key) {
+    case 'h': cycleTab(el, deps, -1); return true;
+    case 'l': cycleTab(el, deps, 1); return true;
+    case 'Tab': e.preventDefault(); cycleTab(el, deps, 1); return true;
+    case '/': el.querySelector('#ksefadQuery')?.focus(); e.preventDefault(); return true;
+    default: break;
+  }
+
+  if (view.dir === 'clients') {
+    const clients = clientsFor(deps.store);
+    switch (e.key) {
+      case 'j': view.clientIdx = Math.min(view.clientIdx + 1, Math.max(0, clients.length - 1)); renderPage(el, deps); return true;
+      case 'k': view.clientIdx = Math.max(view.clientIdx - 1, 0); renderPage(el, deps); return true;
+      case 'd': view.clientTab = 'dane'; renderPage(el, deps); return true;
+      case 'f': view.clientTab = 'fv'; renderPage(el, deps); return true;
+      case 'w': view.clientTab = 'wyd'; renderPage(el, deps); return true;
+      case 'n': el.querySelector('#ksefadClientAdd')?.click(); return true;
+      default: return false;
+    }
+  }
+
   const invoices = deps.store.listInvoices({
     companyId: view.companyId || undefined,
     dir: view.dir || undefined,
@@ -637,12 +929,6 @@ export function pageOnKey(e, el, deps) {
     limit: 300,
   });
   switch (e.key) {
-    case 'h': switchTab(el, deps, 'sale'); return true;
-    case 'l': switchTab(el, deps, 'cost'); return true;
-    case 'Tab':
-      e.preventDefault();
-      switchTab(el, deps, view.dir === 'sale' ? 'cost' : 'sale');
-      return true;
     case 'j': view.selected = Math.min(view.selected + 1, invoices.length - 1); renderPage(el, deps); return true;
     case 'k': view.selected = Math.max(view.selected - 1, 0); renderPage(el, deps); return true;
     case 'Enter':
@@ -652,7 +938,6 @@ export function pageOnKey(e, el, deps) {
     case 'r':
       if (!view.busy) runSync(el, deps);
       return true;
-    case '/': el.querySelector('#ksefadQuery')?.focus(); e.preventDefault(); return true;
     default: return false;
   }
 }

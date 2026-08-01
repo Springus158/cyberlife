@@ -5,7 +5,8 @@ import { KsefClient } from './ksef-client.js';
 import { buildFa3Xml, computeTotals, lineNet, lineVat } from './fa3.js';
 import { assertDate, normalizeNip } from './store.js';
 import {
-  fakturowniaMode, createInFakturownia, fvSendToKsef, fvGovStatus, fvSetPaid, importFromFakturownia,
+  fakturowniaMode, createInFakturownia, fvSendToKsef, fvGovStatus, fvSetPaid,
+  importFromFakturownia, fetchFakturowniaClients,
 } from './fakturownia.js';
 
 // KSeF caps a metadata query at 3 months; a cursor older than this would
@@ -123,6 +124,8 @@ export async function syncCompany(deps, company) {
     if (fakturowniaMode(company) === 'dual' && store.syncState(company.id).fakturowniaImportedAt) {
       await importFromFakturownia(deps, company, null, { period: 'last_12_months' })
         .catch((err) => log(`Fakturownia refresh failed (KSeF sync continues): ${err?.message || err}`));
+      await fetchFakturowniaClients(deps, company)
+        .catch((err) => log(`Fakturownia clients refresh failed: ${err?.message || err}`));
     }
     const client = new KsefClient({ http, env: company.env || 'prod' });
     const accessToken = await accessTokenFor(http, company);
