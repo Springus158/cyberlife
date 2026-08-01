@@ -3,7 +3,7 @@
 // Settings section. All rendering is plain DOM into the container the host
 // hands us.
 
-import { importFromFakturownia, fetchFakturowniaInfo } from './fakturownia.js';
+import { importFromFakturownia, fetchFakturowniaInfo, fakturowniaMode } from './fakturownia.js';
 import { syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, clearTokenCache, today } from './service.js';
 import { lineNet, lineVat } from './fa3.js';
 
@@ -28,7 +28,16 @@ function injectStyle() {
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
-    .ksefad { display:flex; flex-direction:column; gap:10px; height:100%; font-size: 14px; }
+    .ksefad { display:flex; flex-direction:column; gap:10px; height:100%; font-size: 14px; position:relative; }
+    .ksefad-sync-overlay { position:absolute; inset:0; z-index:20; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:14px; border-radius:10px;
+      background: rgba(17,17,27,.62); backdrop-filter: blur(3px); }
+    .ksefad-sync-overlay svg { color: var(--accent, #89b4fa); animation: ksefad-rot 1.1s linear infinite; }
+    .ksefad-sync-overlay .ksefad-sync-title { font-size:17px; font-weight:600; }
+    .ksefad-sync-overlay .ksefad-sync-sub { color: var(--text-muted, #6c7086); font-size:13.5px; }
+    @keyframes ksefad-rot { to { transform: rotate(360deg); } }
+    @keyframes ksefad-dots { 0%, 20% { content:''; } 40% { content:'.'; } 60% { content:'..'; } 80%, 100% { content:'...'; } }
+    .ksefad-sync-title::after { display:inline-block; width:1.2em; text-align:left; content:''; animation: ksefad-dots 1.6s steps(1) infinite; }
     .ksefad-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .ksefad-tabs { display:flex; gap:2px; }
     .ksefad-tab { background:transparent; border:1px solid var(--border, #45475a); color:inherit;
@@ -172,6 +181,17 @@ export function renderPage(el, deps) {
         ${invoices.length ? '' : '<p class="ksefad-muted" style="padding:12px">No invoices match. Run the Fakturownia import (Settings) or Sync KSeF.</p>'}
       </div>
       <div class="ksefad-muted">${invoices.length} shown · h/l lub Tab: przychody/wydatki · j/k select · Enter open · n new · r sync</div>
+      ${view.busy === 'sync' ? `
+        <div class="ksefad-sync-overlay">
+          <svg width="76" height="76" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 12a8 8 0 0 1-14.5 4.7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            <path d="M4 12a8 8 0 0 1 14.5-4.7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            <path d="M18.9 3.6v3.9H15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5.1 20.4v-3.9H9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="ksefad-sync-title">Synchronizacja</div>
+          <div class="ksefad-sync-sub">Pobieram faktury i statusy płatności (KSeF${view.dualSync ? ' + Fakturownia' : ''})</div>
+        </div>` : ''}
     </div>`;
 
   const rerender = () => renderPage(el, deps);
@@ -199,10 +219,11 @@ export function renderPage(el, deps) {
 
 async function runSync(el, deps) {
   const { store } = deps;
+  const targets = view.companyId ? [store.company(view.companyId)] : store.companies();
   view.busy = 'sync';
+  view.dualSync = targets.filter(Boolean).some((c) => fakturowniaMode(c) === 'dual');
   view.error = '';
   renderPage(el, deps);
-  const targets = view.companyId ? [store.company(view.companyId)] : store.companies();
   const errors = [];
   for (const company of targets.filter(Boolean)) {
     try {
