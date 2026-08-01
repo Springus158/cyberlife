@@ -136,6 +136,18 @@ export function injectStyle() {
 const MONTH_NAMES = ['styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec',
   'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
 
+// Shared wrapper for print documents: without print-color-adjust browsers
+// strip the row tints when printing or saving to PDF
+export function printDocHtml(title, body) {
+  return `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>${esc(title)}</title>
+    <style>
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      @page { margin: 10mm; }
+      body { margin: 0; }
+    </style></head>
+    <body onload="window.print()">${body}</body></html>`;
+}
+
 export function currentMonth() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -959,11 +971,7 @@ export function printInvoice(deps, company, inv) {
   // WKWebView has no window.print(); the document opens in the default
   // browser, prints itself and can be saved as PDF there
   const title = `${inv.kind === 'proforma' ? 'Proforma' : 'Faktura'} ${inv.number}`;
-  deps.cl.openPreview(
-    `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>${esc(title)}</title></head>`
-    + `<body onload="window.print()">${body}</body></html>`,
-    title,
-  ).catch((err) => {
+  deps.cl.openPreview(printDocHtml(title, body), title).catch((err) => {
     deps.cl.log('print preview failed:', err);
     alert(`Nie udało się otworzyć podglądu wydruku: ${err.message || err}`);
   });

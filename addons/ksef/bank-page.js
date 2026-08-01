@@ -6,7 +6,7 @@
 import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { setPaid } from './service.js';
 import {
-  injectStyle, currentMonth, monthAdd, monthLabel, periodBarHtml, bindPeriodBar, periodOf,
+  injectStyle, currentMonth, monthAdd, monthLabel, periodBarHtml, bindPeriodBar, periodOf, printDocHtml,
 } from './page.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -478,11 +478,7 @@ function printReport(deps, company, month, txs) {
       }).join('')}
     </div>`;
   const title = `Rozliczenie wyciągów ${month} — ${company.name}`;
-  deps.cl.openPreview(
-    `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>${esc(title)}</title></head>`
-    + `<body onload="window.print()">${body}</body></html>`,
-    title,
-  ).catch((err) => {
+  deps.cl.openPreview(printDocHtml(title, body), title).catch((err) => {
     deps.cl.log('report preview failed:', err);
     bankView.error = `Nie udało się otworzyć raportu: ${err.message || err}`;
   });
