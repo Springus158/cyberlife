@@ -6,6 +6,7 @@ import { createStore, normalizeNip, assertDate } from './store.js';
 import {
   renderPage, pageOnKey, renderClientsPage, clientsOnKey,
   renderTodayWidget, renderUnpaidWidget, renderSettings,
+  activeCompany, setActiveCompany,
 } from './page.js';
 import { renderBankPage, bankOnKey } from './bank-page.js';
 import { syncCompany, createInvoice, sendToKsef, setPaid } from './service.js';
@@ -19,10 +20,49 @@ export default async function activate(cl) {
   let pageEl = null;
   let clientsEl = null;
   let bankEl = null;
+  let companyBarEl = null;
+
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const rerenderPages = () => {
+    if (pageEl) renderPage(pageEl, deps);
+    if (clientsEl) renderClientsPage(clientsEl, deps);
+    if (bankEl) renderBankPage(bankEl, deps);
+  };
+
+  // The company picker is anchored in the module page bar and scopes every
+  // page at once — exactly one company is always selected, never "all"
+  const updateCompanyBar = () => {
+    if (!companyBarEl) return;
+    const companies = store.companies();
+    const company = activeCompany(store);
+    if (!company) {
+      companyBarEl.innerHTML = '';
+      return;
+    }
+    if (companies.length === 1) {
+      companyBarEl.innerHTML = `<span class="addon-subbar-label">🏢 ${esc(company.name)}</span>`;
+      return;
+    }
+    companyBarEl.innerHTML = `
+      <select id="ksefadCompanyBar" title="Firma">
+        ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === company.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+      </select>`;
+    companyBarEl.querySelector('#ksefadCompanyBar').onchange = (e) => {
+      setActiveCompany(e.target.value);
+      rerenderPages();
+      updateCompanyBar();
+    };
+  };
+
   cl.registerModule({
     id: 'main',
     label: 'KSeF',
     icon: '🧾',
+    renderBar(el) {
+      companyBarEl = el;
+      updateCompanyBar();
+    },
     pages: [
       {
         id: 'invoices',
@@ -35,6 +75,7 @@ export default async function activate(cl) {
         onKey(e) {
           return pageEl ? pageOnKey(e, pageEl, deps) : false;
         },
+        onShow: () => updateCompanyBar(),
       },
       {
         id: 'clients',
@@ -47,6 +88,7 @@ export default async function activate(cl) {
         onKey(e) {
           return clientsEl ? clientsOnKey(e, clientsEl, deps) : false;
         },
+        onShow: () => updateCompanyBar(),
       },
       {
         id: 'bank',
@@ -59,6 +101,7 @@ export default async function activate(cl) {
         onKey(e) {
           return bankEl ? bankOnKey(e, bankEl, deps) : false;
         },
+        onShow: () => updateCompanyBar(),
       },
     ],
   });
@@ -180,5 +223,6 @@ export default async function activate(cl) {
     pageEl = null;
     clientsEl = null;
     bankEl = null;
+    companyBarEl = null;
   };
 }

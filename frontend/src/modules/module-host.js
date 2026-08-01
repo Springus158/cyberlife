@@ -216,6 +216,13 @@ function makePagedModule(desc, el) {
   el.classList.add('addon-panel-paged');
   const bar = document.createElement('div');
   bar.className = 'addon-subbar';
+  const tabsWrap = document.createElement('div');
+  tabsWrap.className = 'addon-subbar-tabs';
+  // The extra slot survives tab re-renders — addon-owned controls that
+  // apply to every page (filters, a company picker) live there
+  const extra = document.createElement('div');
+  extra.className = 'addon-subbar-extra';
+  bar.append(tabsWrap, extra);
   const pagesWrap = document.createElement('div');
   pagesWrap.className = 'addon-pages';
   el.append(bar, pagesWrap);
@@ -233,14 +240,14 @@ function makePagedModule(desc, el) {
   let activePage = desc.pages[0].id;
 
   const renderBar = () => {
-    bar.innerHTML = desc.pages.map((p, i) => `
+    tabsWrap.innerHTML = desc.pages.map((p, i) => `
       <button class="addon-subtab ${p.id === activePage ? 'active' : ''}" data-page="${escapeHtml(p.id)}">
         ${p.icon ? `<span class="addon-subtab-icon">${p.icon}</span>` : ''}
         <span>${escapeHtml(p.label)}</span>
         ${i < 9 ? `<span class="addon-subtab-digit">⇧${i + 1}</span>` : ''}
       </button>
     `).join('');
-    bar.querySelectorAll('.addon-subtab').forEach(btn => {
+    tabsWrap.querySelectorAll('.addon-subtab').forEach(btn => {
       btn.addEventListener('click', () => showPage(btn.dataset.page));
     });
   };
@@ -262,6 +269,13 @@ function makePagedModule(desc, el) {
 
   addonPageSwitchers.set(desc.id, showPage);
   renderBar();
+  if (typeof desc.renderBar === 'function') {
+    try {
+      desc.renderBar(extra);
+    } catch (err) {
+      console.warn(`addon module ${desc.id}: renderBar failed:`, err);
+    }
+  }
 
   return {
     show: (visible) => { el.style.display = visible ? 'flex' : 'none'; },

@@ -7,6 +7,7 @@ import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { setPaid } from './service.js';
 import {
   injectStyle, currentMonth, monthAdd, monthLabel, periodBarHtml, bindPeriodBar, periodOf, printDocHtml, invDesc,
+  activeCompany,
 } from './page.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -15,7 +16,6 @@ const money = (n, cur = 'PLN') => `${(Number(n) || 0).toFixed(2)} ${cur}`;
 const CATEGORIES = ['opłata bankowa', 'podatek / ZUS', 'przewalutowanie', 'wynagrodzenie', 'odsetki', 'karta / prywatne', 'inne'];
 
 const bankView = {
-  companyId: '',
   mode: 'month',
   month: currentMonth(),
   from: '',
@@ -64,11 +64,6 @@ function invoiceLabel(store, id) {
   return `${inv.number || inv.ksefNumber} · ${money(inv.gross, inv.currency)} · ${inv.dir === 'cost' ? inv.sellerName : inv.buyerName}`;
 }
 
-function activeCompany(store) {
-  const companies = store.companies();
-  return store.company(bankView.companyId) || (companies.length === 1 ? companies[0] : null);
-}
-
 export function bankOnKey(e, el, deps) {
   if (e.metaKey || e.ctrlKey || e.altKey) return false;
   if (document.querySelector('.ksefad-overlay')) return false;
@@ -109,10 +104,6 @@ export function renderBankPage(el, deps) {
       <div class="ksefad-bar">
         <h2 style="margin:0; font-size:17px">🏦 Wyciągi bankowe</h2>
         ${periodBarHtml(bankView)}
-        ${companies.length > 1 ? `
-          <select id="bankCompany">
-            ${companies.map((c) => `<option value="${esc(c.id)}" ${company && c.id === company.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-          </select>` : ''}
         <input type="file" id="bankFiles" multiple accept=".pdf" style="display:none">
         <button class="ksefad-btn primary" id="bankUpload" ${bankView.busy ? 'disabled' : ''}>${bankView.busy === 'parse' ? 'Analizuję…' : '+ Wgraj wyciągi (PDF)'}</button>
         <span style="flex:1"></span>
@@ -172,7 +163,6 @@ export function renderBankPage(el, deps) {
   el.querySelectorAll('[data-show]').forEach((cb) => {
     cb.onchange = () => { bankView.show[cb.dataset.show] = cb.checked; rerender(); };
   });
-  el.querySelector('#bankCompany')?.addEventListener('change', (e) => { bankView.companyId = e.target.value; rerender(); });
   el.querySelector('#bankUpload').onclick = () => el.querySelector('#bankFiles').click();
   el.querySelector('#bankFiles').onchange = (e) => ingestFiles(el, deps, company, e.target.files);
   el.querySelector('#bankRematch')?.addEventListener('click', async () => {

@@ -250,6 +250,19 @@ const view = {
   to: '',
 };
 
+// One company is always selected for the whole addon (no "all companies"
+// mixing); the picker itself is anchored in the module page bar (main.js)
+export function activeCompany(store) {
+  if (!store.company(view.companyId)) view.companyId = store.companies()[0]?.id || '';
+  return store.company(view.companyId) || null;
+}
+
+export function setActiveCompany(id) {
+  view.companyId = id;
+  view.selected = 0;
+  view.clientIdx = 0;
+}
+
 const TAB_ORDER = ['sale', 'cost'];
 
 function switchTab(el, deps, dir) {
@@ -285,15 +298,6 @@ function bindShellControls(el, deps) {
   el.querySelectorAll('.ksefad-tab').forEach((btn) => {
     btn.onclick = () => switchTab(el, deps, btn.dataset.dir);
   });
-  const company = el.querySelector('#ksefadCompany');
-  if (company) {
-    company.onchange = (e) => {
-      view.companyId = e.target.value;
-      view.selected = 0;
-      view.clientIdx = 0;
-      renderPage(el, deps);
-    };
-  }
   const query = el.querySelector('#ksefadQuery');
   if (query) {
     // Re-rendering replaces the input the user is typing into, so focus and
@@ -323,9 +327,10 @@ export function renderPage(el, deps) {
       </div>`;
     return;
   }
+  activeCompany(store);
   const period = periodOf(view);
   const invoices = store.listInvoices({
-    companyId: view.companyId || undefined,
+    companyId: view.companyId,
     dir: view.dir || undefined,
     unpaid: view.unpaid || undefined,
     query: view.query || undefined,
@@ -340,10 +345,6 @@ export function renderPage(el, deps) {
       <div class="ksefad-bar">
         ${tabsHtml()}
         ${periodBarHtml(view)}
-        <select id="ksefadCompany">
-          <option value="">All companies</option>
-          ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === view.companyId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-        </select>
         <label><input type="checkbox" id="ksefadUnpaid" ${view.unpaid ? 'checked' : ''}> unpaid</label>
         <input id="ksefadQuery" placeholder="search… (/)" value="${esc(view.query)}" style="flex:1; min-width:120px">
         <button class="ksefad-btn" id="ksefadSync" ${view.busy ? 'disabled' : ''}>${view.busy === 'sync' ? 'Syncing…' : '⟳ Sync KSeF (r)'}</button>
@@ -501,23 +502,17 @@ export function renderClientsPage(el, deps) {
       </div>`;
     return;
   }
+  const editableCompany = activeCompany(store);
   const clients = clientsFor(store);
   view.clientIdx = Math.min(view.clientIdx, Math.max(0, clients.length - 1));
   const sel = clients[view.clientIdx] || null;
-  const scoped = view.companyId ? [store.company(view.companyId)].filter(Boolean) : companies;
+  const scoped = [editableCompany].filter(Boolean);
   const canRefresh = scoped.some((c) => fakturowniaMode(c) === 'dual');
-  const editableCompany = view.companyId
-    ? store.company(view.companyId)
-    : (companies.length === 1 ? companies[0] : null);
   const canAdd = editableCompany && fakturowniaMode(editableCompany) !== 'dual';
 
   el.innerHTML = `
     <div class="ksefad">
       <div class="ksefad-bar">
-        <select id="ksefadClientCompany">
-          <option value="">Wszystkie firmy</option>
-          ${companies.map((c) => `<option value="${esc(c.id)}" ${c.id === view.companyId ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-        </select>
         <input id="ksefadClientQuery" placeholder="szukaj klienta… (/)" value="${esc(view.clientQuery)}" style="flex:1; min-width:120px">
         ${canRefresh ? `<button class="ksefad-btn" id="ksefadClientsRefresh" ${view.busy ? 'disabled' : ''}>${view.busy === 'clients' ? 'Odświeżam…' : '⟳ Odśwież z Fakturowni'}</button>` : ''}
         ${canAdd ? '<button class="ksefad-btn primary" id="ksefadClientAdd">+ Nowy klient (n)</button>' : ''}
@@ -536,12 +531,6 @@ export function renderClientsPage(el, deps) {
       <div class="ksefad-muted">${clients.length} klientów · j/k klient · d/f/w: dane/faktury/wydatki</div>
     </div>`;
 
-  const company = el.querySelector('#ksefadClientCompany');
-  company.onchange = (e) => {
-    view.companyId = e.target.value;
-    view.clientIdx = 0;
-    renderClientsPage(el, deps);
-  };
   const query = el.querySelector('#ksefadClientQuery');
   // Re-rendering replaces the input the user is typing into, so focus and
   // caret have to be put back or only the first keystroke ever lands
@@ -1062,9 +1051,10 @@ export function pageOnKey(e, el, deps) {
     default: break;
   }
 
+  activeCompany(deps.store);
   const period = periodOf(view);
   const invoices = deps.store.listInvoices({
-    companyId: view.companyId || undefined,
+    companyId: view.companyId,
     dir: view.dir || undefined,
     unpaid: view.unpaid || undefined,
     query: view.query || undefined,

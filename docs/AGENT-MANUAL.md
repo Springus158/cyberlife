@@ -109,6 +109,14 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
      (click or ⇧1..⇧9 switch pages, each page renders lazily and gets
      `onKey` while active). Never register a second top-level module for
      what is really a page of the same feature.
+     A paged module may also pass `renderBar(el)` — the shell hands it a
+     slot anchored at the right end of the page bar for addon-owned
+     controls that scope EVERY page (a company/account picker, a global
+     filter). The slot survives page switches; the addon keeps the `el`
+     reference and re-renders it itself (e.g. from pages' `onShow`).
+     Style with `.addon-subbar-label` / plain `select`/`input` — the
+     shell styles them to match the bar. Keep it compact: 1-2 controls,
+     no buttons duplicating page actions.
    - `cl.registerWidget({id, title, icon, render(el), dashboard})`
    - `cl.registerSettingsSection({id, label, icon, render(el)})` — a
      section in the Settings sidebar under the Addons group
