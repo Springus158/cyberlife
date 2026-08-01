@@ -131,6 +131,10 @@ export function matchTransactions(txs, invoices) {
       byNumber.get(key).push(inv);
     }
   }
+  // An invoice consumed by any amount-based rule in this run cannot be
+  // handed to a second transaction — identical amounts would otherwise all
+  // point at the same document
+  const used = new Set(txs.map((t) => t.invoiceId).filter(Boolean));
   return txs.map((tx) => {
     if (tx.invoiceId || tx.category) return tx;
     const wantDir = tx.amount < 0 ? 'cost' : 'sale';
@@ -148,29 +152,54 @@ export function matchTransactions(txs, invoices) {
       if (!present) continue;
       for (const inv of invs) {
         if (inv.dir !== wantDir) continue;
-        if (amountOk(inv)) return { ...tx, invoiceId: inv.id, matchedBy: 'numer + kwota', auto: true };
+        if (amountOk(inv)) {
+          used.add(inv.id);
+          return { ...tx, invoiceId: inv.id, matchedBy: 'numer + kwota', auto: true };
+        }
         if (!numeric && key.length >= 6 && !best) {
           best = inv;
           how = 'numer (inna kwota)';
         }
       }
     }
-    if (best) return { ...tx, invoiceId: best.id, matchedBy: how, auto: true };
+    if (best) {
+      used.add(best.id);
+      return { ...tx, invoiceId: best.id, matchedBy: how, auto: true };
+    }
 
-    for (const inv of invoices) {
-      if (inv.dir !== wantDir || !amountOk(inv)) continue;
+    // Recurring identical amounts (monthly retainers) must land on the
+    // invoice issued closest to the operation date, not the oldest unpaid
+    const txTime = Date.parse(tx.date);
+    const dateDist = (inv) => (inv.issueDate ? Math.abs(Date.parse(inv.issueDate) - txTime) : Number.MAX_SAFE_INTEGER);
+    const byCloseness = [...invoices].sort((a, b) => dateDist(a) - dateDist(b));
+    for (const inv of byCloseness) {
+      if (inv.dir !== wantDir || !amountOk(inv) || used.has(inv.id)) continue;
       const other = ascii(wantDir === 'cost' ? inv.sellerName : inv.buyerName);
       const otherNip = wantDir === 'cost' ? inv.sellerNip : inv.buyerNip;
       if (otherNip && normalizeNip(tx.desc).includes(otherNip)) {
+        used.add(inv.id);
         return { ...tx, invoiceId: inv.id, matchedBy: 'NIP + kwota', auto: true };
       }
       const words = other.split(/[^A-Z0-9]+/).filter((w) => w.length >= 5);
       if (words.some((w) => descAscii.includes(w))) {
+        used.add(inv.id);
         return { ...tx, invoiceId: inv.id, matchedBy: 'kontrahent + kwota', auto: true };
       }
       if (NAME_ALIASES.some(([mark, who]) => descAscii.includes(mark) && other.replace(/[^A-Z0-9]/g, '').includes(who))) {
+        used.add(inv.id);
         return { ...tx, invoiceId: inv.id, matchedBy: 'kontrahent + kwota', auto: true };
       }
+    }
+
+    // Last resort for card/web charges whose merchant name has nothing in
+    // common with the issuer's legal name (e.g. a shop domain): a UNIQUE
+    // amount among invoices issued within two weeks of the operation.
+    // Uniqueness is the safety valve — two candidates mean no match.
+    const near = invoices.filter((inv) => inv.dir === wantDir && amountOk(inv) && !used.has(inv.id)
+      && inv.issueDate && Math.abs(Date.parse(inv.issueDate) - Date.parse(tx.date)) <= 14 * 86400e3);
+    if (near.length === 1) {
+      used.add(near[0].id);
+      return { ...tx, invoiceId: near[0].id, matchedBy: 'kwota + data (do weryfikacji)', auto: true };
     }
 
     const category = categorize(tx);
