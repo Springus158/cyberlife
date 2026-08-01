@@ -816,11 +816,18 @@ let historyRefreshTimer = null;
 function maybeRefreshHistory(historySize) {
   if (typeof historySize !== 'number' || !dashboardState.historyLines) return;
   if (historySize === dashboardState.historySizeAtLoad) return;
+  // At the bottom the scrollback is off-screen, and a streaming session
+  // grows history on every frame — re-capturing the entire styled history
+  // each second froze the whole app once the scrollback got long. Scrolling
+  // up reloads it on demand (hookViewerScroll), so only a viewer that is
+  // actually showing history keeps it fresh here.
+  const viewer = document.getElementById('itermOutputViewer');
+  if (!viewer || viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 30) return;
   if (historyRefreshTimer) return;
   historyRefreshTimer = setTimeout(() => {
     historyRefreshTimer = null;
     loadHistory();
-  }, 1000);
+  }, 3000);
 }
 
 function cancelHistoryRefresh() {
@@ -2098,15 +2105,39 @@ function updateStyledOutputViewer() {
     return lineDiv;
   }
 
-  // Prepend scrollback history if loaded (styled)
-  if (dashboardState.historyLines && dashboardState.historyLines.length > 0) {
-    for (const histLineRuns of dashboardState.historyLines) {
-      fragment.appendChild(renderStyledLine(histLineRuns, 'term-line term-history-line'));
+  // The viewer holds two persistent boxes so the (potentially huge)
+  // scrollback DOM survives live-screen updates: rebuilding thousands of
+  // history lines on every 25ms frame is what used to freeze the app
+  let histBox = viewer.querySelector(':scope > .term-hist-box');
+  let liveBox = viewer.querySelector(':scope > .term-live-box');
+  if (!histBox || !liveBox) {
+    viewer.innerHTML = '';
+    histBox = document.createElement('div');
+    histBox.className = 'term-hist-box';
+    liveBox = document.createElement('div');
+    liveBox.className = 'term-live-box';
+    viewer.appendChild(histBox);
+    viewer.appendChild(liveBox);
+    viewer._renderedHistory = undefined;
+  }
+
+  // History colors depend on the profile, so a theme change invalidates too
+  const histTheme = `${defaultFg}|${defaultBg}|${dashboardState.currentTheme || ''}`;
+  if (viewer._renderedHistory !== dashboardState.historyLines || viewer._renderedHistTheme !== histTheme) {
+    const hist = document.createDocumentFragment();
+    if (dashboardState.historyLines && dashboardState.historyLines.length > 0) {
+      for (const histLineRuns of dashboardState.historyLines) {
+        hist.appendChild(renderStyledLine(histLineRuns, 'term-line term-history-line'));
+      }
+      const sep = document.createElement('div');
+      sep.className = 'term-history-separator';
+      sep.textContent = '── live ──';
+      hist.appendChild(sep);
     }
-    const sep = document.createElement('div');
-    sep.className = 'term-history-separator';
-    sep.textContent = '── live ──';
-    fragment.appendChild(sep);
+    histBox.innerHTML = '';
+    histBox.appendChild(hist);
+    viewer._renderedHistory = dashboardState.historyLines;
+    viewer._renderedHistTheme = histTheme;
   }
 
   // Attached (TERM mode): draw a block cursor where the session's cursor is
@@ -2119,8 +2150,8 @@ function updateStyledOutputViewer() {
     fragment.appendChild(renderStyledLine(withCursor([], cursor.x), 'term-line'));
   }
 
-  viewer.innerHTML = '';
-  viewer.appendChild(fragment);
+  liveBox.innerHTML = '';
+  liveBox.appendChild(fragment);
 
   if (wasAtBottom) {
     viewer.scrollTop = viewer.scrollHeight;

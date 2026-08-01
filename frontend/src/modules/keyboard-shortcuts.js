@@ -280,10 +280,15 @@ function handleNormalKey(e) {
 
   if (hasOpenModal()) return;
 
-  // The active module gets first pick (list selection, module actions)
+  // The active module gets first pick (list selection, module actions).
+  // A handled key must also be default-prevented, or WKWebView forwards it
+  // to the native responder chain and macOS beeps on every press
   if (gChordUntil <= Date.now()) {
     const mod = getModules()[activeModuleIndex()];
-    if (mod?.onKey && mod.onKey(e)) return;
+    if (mod?.onKey && mod.onKey(e)) {
+      e.preventDefault();
+      return;
+    }
   }
 
   // g-chord completion
