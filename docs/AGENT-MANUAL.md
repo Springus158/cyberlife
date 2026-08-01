@@ -118,6 +118,8 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
      manifest `agentTools` entry; the returned value becomes the MCP
      tool result (throw to report an error)
    - `cl.openModule(id)` — switch the app to one of the addon's modules
+   - `cl.pdfText(dataBase64)` — layout-preserving text of a PDF via the
+     app's pdftotext bridge (needs poppler installed; ≤15MB)
    - `cl.log(…)` — prefixed console logging
 3. `addons_reload` (hot reload), then `addons_list` to check for manifest
    errors. New addons are DISABLED until enabled (`addons_set_enabled`

@@ -6,6 +6,7 @@ import { createStore, normalizeNip, assertDate } from './store.js';
 import {
   renderPage, pageOnKey, renderTodayWidget, renderUnpaidWidget, renderSettings,
 } from './page.js';
+import { renderBankPage } from './bank-page.js';
 import { syncCompany, createInvoice, sendToKsef, setPaid } from './service.js';
 import { importFromFakturownia } from './fakturownia.js';
 
@@ -25,6 +26,15 @@ export default async function activate(cl) {
     },
     onKey(e) {
       return pageEl ? pageOnKey(e, pageEl, deps) : false;
+    },
+  });
+
+  cl.registerModule({
+    id: 'bank',
+    label: 'Wyciągi',
+    icon: '🏦',
+    render(el) {
+      renderBankPage(el, deps);
     },
   });
 

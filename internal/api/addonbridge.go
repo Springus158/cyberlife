@@ -16,6 +16,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -168,6 +170,74 @@ func (s *Server) handleAddonHTTP(w http.ResponseWriter, r *http.Request) {
 		result["bodyBase64"] = true
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// ---- PDF text extraction ----
+
+const maxPdfBytes = 15 << 20
+
+type addonPdfTextRequest struct {
+	Addon      string `json:"addon"`
+	DataBase64 string `json:"dataBase64"`
+}
+
+// handleAddonPdfText extracts text (layout-preserving) from a PDF for an
+// enabled addon. The webview cannot read PDFs, so this shells out to
+// poppler's pdftotext — reported as an optional dependency when missing.
+func (s *Server) handleAddonPdfText(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("POST only"))
+		return
+	}
+	var req addonPdfTextRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	addon, ok := addons.Get(req.Addon, s.manager.GetAddonsEnabled())
+	if !ok || !addon.Enabled {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("addon %q is not enabled", req.Addon))
+		return
+	}
+	data, err := base64.StdEncoding.DecodeString(req.DataBase64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("dataBase64 is not valid base64"))
+		return
+	}
+	if len(data) == 0 || len(data) > maxPdfBytes {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("PDF must be 1 byte to %d MB", maxPdfBytes>>20))
+		return
+	}
+	bin, err := exec.LookPath("pdftotext")
+	if err != nil {
+		writeErr(w, http.StatusNotImplemented, fmt.Errorf("pdftotext not installed — install poppler (brew install poppler / apt install poppler-utils)"))
+		return
+	}
+	tmp, err := os.CreateTemp("", "addon-*.pdf")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer func() {
+		if err := os.Remove(tmp.Name()); err != nil {
+			logging.Debug("pdftext temp remove failed", "error", err)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		logging.Debug("pdftext temp close failed", "error", err)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "-layout", tmp.Name(), "-").Output()
+	if err != nil {
+		logging.Warn("pdftotext failed", "addon", req.Addon, "error", err)
+		writeErr(w, http.StatusUnprocessableEntity, fmt.Errorf("pdftotext failed: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"text": string(out)})
 }
 
 // ---- agent tool bridge ----

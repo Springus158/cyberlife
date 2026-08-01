@@ -61,7 +61,7 @@ export function createStore(cl) {
 
   async function deleteCompany(id) {
     for (const key of Object.keys(cache)) {
-      if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`)
+      if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`) || key.startsWith(`bank:${id}:`)
         || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}`) {
         await drop(key);
       }
@@ -318,6 +318,24 @@ export function createStore(cl) {
     await writeParts(`clients:${companyId}`, sorted);
   }
 
+  // ---- bank statements (transactions per company + month) ----
+
+  function bankMonth(companyId, month) {
+    return partsOf(`bank:${companyId}:${month}`).flatMap((k) => cache[k] || []);
+  }
+
+  async function saveBankMonth(companyId, month, txs) {
+    await writeParts(`bank:${companyId}:${month}`, txs);
+  }
+
+  function bankMonths(companyId) {
+    return Object.keys(cache)
+      .filter((k) => k.startsWith(`bank:${companyId}:`) && !k.includes('#'))
+      .map((k) => k.split(':')[2])
+      .sort()
+      .reverse();
+  }
+
   // ---- Fakturownia account snapshot (read-only display) ----
 
   function fvInfo(companyId) {
@@ -347,5 +365,8 @@ export function createStore(cl) {
     setFvInfo,
     fvClients,
     saveClients,
+    bankMonth,
+    saveBankMonth,
+    bankMonths,
   };
 }

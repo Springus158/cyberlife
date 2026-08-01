@@ -33,7 +33,7 @@ const STYLE_ID = 'ksefad-style';
 
 // Keyed by element id, not a module flag: a hot reload re-imports the module
 // and would otherwise append a duplicate stylesheet each time
-function injectStyle() {
+export function injectStyle() {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = STYLE_ID;

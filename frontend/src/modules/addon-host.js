@@ -237,6 +237,20 @@ function makeContext(addon, inst) {
       return res.json();
     },
 
+    // Layout-preserving text extraction from a PDF (base64), via the app's
+    // pdftotext bridge — the webview itself cannot read PDF content
+    async pdfText(dataBase64) {
+      const res = await fetch(`${API_BASE}/api/addons/pdftext`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addon: addon.id, dataBase64 }),
+      });
+      if (!res.ok) {
+        throw new Error(`pdftext: ${res.status} ${await res.text()}`);
+      }
+      return (await res.json()).text;
+    },
+
     registerAgentTool(name, handler) {
       if (typeof handler !== 'function') {
         throw new Error('registerAgentTool needs (name, async handler(args))');
