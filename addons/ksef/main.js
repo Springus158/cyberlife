@@ -261,6 +261,7 @@ export default async function activate(cl) {
         currency: c.currency || rec.currency || 'PLN',
         vatRate: c.vatRate ?? rec.vatRate ?? 'disabled',
         paid: !!c.paid,
+        paidDate: c.paidDate || '',
       });
       const updated = await store.updateFileRec(company.id, rec.id, {
         invoiceId: record.id,

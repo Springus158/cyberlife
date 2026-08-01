@@ -152,7 +152,8 @@
               "gross": { "type": "number", "description": "Gross total in the document currency" },
               "vatRate": { "description": "23/8/5/0, or \"zw\"/\"np\"/\"disabled\"; defaults to the rate read from the document" },
               "currency": { "type": "string", "description": "Defaults to the currency read from the document" },
-              "paid": { "type": "boolean" }
+              "paid": { "type": "boolean" },
+              "paidDate": { "type": "string", "description": "YYYY-MM-DD, e.g. the card-charge date from the bank statement" }
             }
           }
         }

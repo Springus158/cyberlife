@@ -80,10 +80,16 @@ export async function createInFakturownia({ http }, company, input, lines) {
   return created;
 }
 
-// Expense document (income: 0). The single position carries the gross
-// total with the document's VAT rate; 'disabled' skips the VAT split for
-// documents where the rate is unknown.
+// Expense document (income: 0). Fakturownia keeps cost documents with the
+// roles INVERTED: the account's own company is the "seller" side — and it
+// must be referenced by department_id (free-text seller data trips the
+// account-security check "creating a department is not allowed"); buyer_*
+// is the issuing counterparty. The single position carries the gross total
+// with the document's VAT rate; 'disabled' skips the VAT split.
 export async function createCostInFakturownia({ http }, company, data) {
+  const departments = await fvRequest(http, company, '/departments.json');
+  const department = departments?.[0];
+  if (!department?.id) throw new Error('Fakturownia returned no department for the account');
   const created = await fvRequest(http, company, '/invoices.json', {
     method: 'POST',
     body: {
@@ -94,10 +100,10 @@ export async function createCostInFakturownia({ http }, company, data) {
         issue_date: data.issueDate,
         sell_date: data.issueDate,
         currency: data.currency || 'PLN',
-        seller_name: data.sellerName,
-        seller_tax_no: data.sellerNip || '',
-        buyer_name: company.name,
-        buyer_tax_no: company.nip,
+        department_id: department.id,
+        buyer_name: data.sellerName,
+        buyer_tax_no: data.sellerNip || '',
+        buyer_company: true,
         status: data.paid ? 'paid' : 'issued',
         ...(data.paid && data.paidDate ? { paid_date: data.paidDate } : {}),
         positions: [{
