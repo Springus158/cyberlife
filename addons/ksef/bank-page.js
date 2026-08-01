@@ -123,7 +123,7 @@ export function renderBankPage(el, deps) {
             <thead><tr><th>Data</th><th>Typ</th><th>Opis</th><th style="text-align:right">Kwota</th><th>Faktura / kategoria</th></tr></thead>
             <tbody>
               ${list.map((tx) => `
-                <tr data-tx="${esc(tx.id)}">
+                <tr data-tx="${esc(tx.id)}" class="${tx.invoiceId ? 'ksefad-row-ok' : (tx.category || categorize(tx)) ? 'ksefad-row-warn' : 'ksefad-row-bad'}">
                   <td style="white-space:nowrap">${esc(tx.date)}</td>
                   <td>${esc(tx.type)}</td>
                   <td title="${esc(tx.desc)}">${esc(tx.desc.length > 80 ? `${tx.desc.slice(0, 80)}…` : tx.desc)}</td>

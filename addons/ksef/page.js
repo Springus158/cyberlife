@@ -77,6 +77,12 @@ export function injectStyle() {
     .ksefad-table { width:100%; border-collapse: collapse; }
     .ksefad-table th { text-align:left; opacity:.6; font-weight:600; padding:4px 8px; border-bottom:1px solid var(--border, #45475a); }
     .ksefad-table td { padding:5px 8px; border-bottom:1px solid rgba(128,128,128,.15); }
+    .ksefad-row-ok td { background: rgba(166,227,161,.06); }
+    .ksefad-row-ok td:first-child { box-shadow: inset 3px 0 0 rgba(166,227,161,.55); }
+    .ksefad-row-warn td { background: rgba(249,226,175,.06); }
+    .ksefad-row-warn td:first-child { box-shadow: inset 3px 0 0 rgba(249,226,175,.5); }
+    .ksefad-row-bad td { background: rgba(243,139,168,.09); }
+    .ksefad-row-bad td:first-child { box-shadow: inset 3px 0 0 rgba(243,139,168,.6); }
     .ksefad-table tr.sel td, .ksefad-table tbody tr:hover td { background: rgba(137,180,250,.08); cursor:pointer; }
     .ksefad-scroll { overflow:auto; flex:1; min-height:0; }
     .ksefad-badge { font-size:.85em; border:1px solid; border-radius:10px; padding:0 7px; white-space:nowrap; }
