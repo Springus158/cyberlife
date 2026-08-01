@@ -124,10 +124,98 @@ export function extractVatRate(text) {
   return null;
 }
 
+const EU_CC = new Set(['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'EL', 'HU',
+  'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'CH', 'NO']);
+
+// Foreign (non-PL) VAT ids, only on lines that actually talk about VAT —
+// a bare "DE 12345678" on an address line is a postcode, not a tax id
+export function extractVatIds(text) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (!/VAT|USt|TVA|BTW|MwSt|Tax\s*(ID|Reg)/i.test(line)) continue;
+    for (const m of line.matchAll(/\b([A-Z]{2})\s?([0-9A-Z]{8,12})\b/g)) {
+      if (!EU_CC.has(m[1]) || !/\d/.test(m[2])) continue;
+      const id = m[1] + m[2];
+      if (!out.includes(id)) out.push(id);
+    }
+  }
+  return out;
+}
+
+// pdftotext -layout keeps columns as runs of 3+ spaces; a "cell" is one run
+function splitSegments(line) {
+  const out = [];
+  let idx = 0;
+  for (const part of line.split(/(\s{3,})/)) {
+    if (!/^\s*$/.test(part)) out.push({ start: idx, text: part });
+    idx += part.length;
+  }
+  return out;
+}
+
+// The issuer's name and address sit in the lines directly above its tax id,
+// in the same layout column — collect that block walking upward
+export function extractSellerBlock(text, taxToken) {
+  if (!taxToken) return null;
+  const digits = String(taxToken).replace(/\D/g, '');
+  const lines = text.split('\n');
+  const clean = (s) => s.replace(/\s+/g, ' ').trim();
+  const inSeg = (seg) => {
+    const packed = seg.text.replace(/[\s-]/g, '');
+    return packed.includes(taxToken) || (digits.length >= 9 && packed.replace(/\D/g, '').includes(digits));
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const seg = splitSegments(lines[i]).find(inSeg);
+    if (!seg) continue;
+    const block = [];
+    let blankSkipped = false;
+    for (let j = i - 1; j >= 0 && block.length < 5; j--) {
+      const cell = splitSegments(lines[j]).find((s) => Math.abs(s.start - seg.start) <= 14);
+      const t = cell ? clean(cell.text) : '';
+      if (!t) {
+        // one blank line may separate the name from the address block
+        if (blankSkipped || !block.length) break;
+        blankSkipped = true;
+        continue;
+      }
+      if (/^(faktura|invoice|rachunek|paragon|data |date |nr |no\.|iban|swift|konto|account)/i.test(t)) break;
+      if (/^[\d\s.,%-]+$/.test(t)) break;
+      if (/sprzedawca|seller|wystawca|issuer|dostawca|supplier|bill from/i.test(t)) break;
+      // corporate-registry footers (board, court register) are below the
+      // company data, never part of the address
+      if (/CEO|Gesch[aä]ftsf|Registration Office|Managing Director|Zarz[ąa]d|HRB|KRS|REGON|Kapita[łl]/i.test(t)) {
+        block.length = 0;
+        continue;
+      }
+      block.unshift(t.replace(/^(adres|address)[:\s]+/i, ''));
+    }
+    if (!block.length) continue;
+    // A street or postcode as the first line means the actual name sits
+    // outside the column — better no name than an address posing as one
+    let name = block[0];
+    let rest = block.slice(1);
+    if (/^(ul\.|al\.|aleja|ulica|pl\.|os\.)\s/i.test(name) || /^\d{2}-\d{3}\s/.test(name)) {
+      rest = block;
+      name = '';
+    }
+    return {
+      name,
+      address1: rest[0] || '',
+      address2: clean(rest.slice(1).join(', ')),
+    };
+  }
+  return null;
+}
+
 export function extractFields(text, ownNip) {
   const amounts = extractAmounts(text);
+  const nips = extractNips(text, ownNip);
+  const vatIds = extractVatIds(text);
+  const seller = extractSellerBlock(text, nips[0]) || extractSellerBlock(text, vatIds[0]);
   return {
-    nips: extractNips(text, ownNip),
+    nips,
+    vatIds,
+    seller,
     dates: extractDates(text),
     amounts,
     numbers: extractInvoiceNumbers(text),

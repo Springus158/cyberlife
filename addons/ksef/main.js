@@ -343,7 +343,7 @@ export default async function activate(cl) {
     const safe = String(args.name || 'dokument').normalize('NFKD').replace(/[̀-ͯ]/g, '')
       .replace(/[^A-Za-z0-9._-]+/g, '_').replace(/\.(png|jpe?g|pdf)$/i, '').slice(0, 70);
     const isPdf = bytes[0] === 0x25 && bytes[1] === 0x50; // %P
-    let fields = { nips: [], dates: [], amounts: { strong: [], all: [] }, numbers: [], currency: '', vatRate: null };
+    let fields = { nips: [], vatIds: [], seller: null, dates: [], amounts: { strong: [], all: [] }, numbers: [], currency: '', vatRate: null };
     if (isPdf) {
       try {
         fields = extractFields(await cl.pdfText(args.dataBase64), company.nip);
@@ -366,6 +366,10 @@ export default async function activate(cl) {
       invoiceId: match?.invoice.id || '',
       matchedBy: match?.how || '',
       nip: fields.nips[0] || '',
+      vatId: fields.vatIds?.[0] || '',
+      sellerName: fields.seller?.name || '',
+      sellerAddress1: fields.seller?.address1 || '',
+      sellerAddress2: fields.seller?.address2 || '',
       number: fields.numbers[0] || '',
       docDate: fields.dates[0] || '',
       gross: fields.amounts.strong[0] || 0,
@@ -424,10 +428,10 @@ export default async function activate(cl) {
         number: c.number || rec.number || '',
         issueDate: c.issueDate || rec.docDate || `${rec.month}-01`,
         sellerNip: c.sellerNip || rec.nip || '',
-        sellerName: c.sellerName || rec.name,
-        sellerVatId: c.sellerVatId || '',
-        sellerAddress1: c.sellerAddress1 || '',
-        sellerAddress2: c.sellerAddress2 || '',
+        sellerName: c.sellerName || rec.sellerName || rec.name,
+        sellerVatId: c.sellerVatId || rec.vatId || '',
+        sellerAddress1: c.sellerAddress1 || rec.sellerAddress1 || '',
+        sellerAddress2: c.sellerAddress2 || rec.sellerAddress2 || '',
         gross: Number(c.gross) || rec.gross || 0,
         currency: c.currency || rec.currency || 'PLN',
         vatRate: c.vatRate ?? rec.vatRate ?? 'disabled',

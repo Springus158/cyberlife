@@ -182,7 +182,7 @@ async function uploadFiles(el, deps, company, fileList) {
       const key = `files/manual/${sha.slice(0, 12)}-${safeName.replace(/\.(png|jpe?g)$/i, '')}.pdf`.replace(/\.pdf\.pdf$/i, '.pdf');
       await deps.cl.putDataFile(key, bufToBase64(buf), { toPdf: true });
 
-      let fields = { nips: [], dates: [], amounts: { strong: [], all: [] }, numbers: [], currency: '' };
+      let fields = { nips: [], vatIds: [], seller: null, dates: [], amounts: { strong: [], all: [] }, numbers: [], currency: '' };
       const isPdf = /\.pdf$/i.test(file.name);
       if (isPdf) {
         try {
@@ -203,6 +203,10 @@ async function uploadFiles(el, deps, company, fileList) {
         invoiceId: match?.invoice.id || '',
         matchedBy: match?.how || '',
         nip: fields.nips[0] || '',
+        vatId: fields.vatIds?.[0] || '',
+        sellerName: fields.seller?.name || '',
+        sellerAddress1: fields.seller?.address1 || '',
+        sellerAddress2: fields.seller?.address2 || '',
         number: fields.numbers[0] || '',
         docDate: fields.dates[0] || '',
         gross: fields.amounts.strong[0] || 0,
@@ -316,11 +320,11 @@ function openCreateCostForm(el, deps, company, rec) {
       <div class="adk-form">
         <label class="adk-field"><span>Numer dokumentu</span><input id="fcNumber" value="${esc(rec.number || '')}"></label>
         <label class="adk-field"><span>Data wystawienia</span><input id="fcDate" type="date" value="${esc(rec.docDate || `${rec.month || currentMonth()}-01`)}"></label>
-        <label class="adk-field"><span>Sprzedawca</span><input id="fcSeller" value="${esc(rec.name.replace(/\.(pdf|png|jpe?g)$/i, '').replace(/[_-]+/g, ' '))}"></label>
+        <label class="adk-field"><span>Sprzedawca</span><input id="fcSeller" value="${esc(rec.sellerName || rec.name.replace(/\.(pdf|png|jpe?g)$/i, '').replace(/[_-]+/g, ' '))}"></label>
         <label class="adk-field"><span>NIP sprzedawcy</span><input id="fcNip" value="${esc(rec.nip || '')}" placeholder="polski NIP (cyfry)"></label>
-        <label class="adk-field"><span>VAT ID (zagraniczny)</span><input id="fcVatId" placeholder="np. IE9692928F"></label>
-        <label class="adk-field"><span>Adres — ulica</span><input id="fcAddr1"></label>
-        <label class="adk-field"><span>Kod, miasto, kraj</span><input id="fcAddr2" placeholder="np. D04 X2K5 Dublin 4, Ireland"></label>
+        <label class="adk-field"><span>VAT ID (zagraniczny)</span><input id="fcVatId" value="${esc(rec.vatId || '')}" placeholder="np. IE9692928F"></label>
+        <label class="adk-field"><span>Adres — ulica</span><input id="fcAddr1" value="${esc(rec.sellerAddress1 || '')}"></label>
+        <label class="adk-field"><span>Kod, miasto, kraj</span><input id="fcAddr2" value="${esc(rec.sellerAddress2 || '')}" placeholder="np. D04 X2K5 Dublin 4, Ireland"></label>
         <label class="adk-field"><span>Kwota brutto</span><input id="fcGross" type="number" step="0.01" value="${rec.gross || ''}"></label>
         <label class="adk-field"><span>Waluta</span>
           <select id="fcCurrency">

@@ -33,6 +33,11 @@ function ksefMark(inv) {
   return '<span class="ksefad-no" title="brak w KSeF">✗</span>';
 }
 
+function fvMark(inv) {
+  if (inv.fvId) return `<span class="ksefad-ok" title="Fakturownia #${esc(inv.fvId)}">✓</span>`;
+  return '<span class="ksefad-no" title="brak w Fakturowni">✗</span>';
+}
+
 function payBadge(inv) {
   if (inv.kind === 'proforma') return '<span class="ksefad-muted">proforma</span>';
   if (inv.paid) return '<span class="ksefad-badge paid">opłacona</span>';
@@ -238,6 +243,8 @@ const view = {
   companyId: '',
   dir: 'sale',
   unpaid: false,
+  noKsef: false,
+  noFv: false,
   query: '',
   busy: '',
   error: '',
@@ -328,9 +335,10 @@ export function renderPage(el, deps) {
       </div>`;
     return;
   }
-  activeCompany(store);
+  const comp = activeCompany(store);
+  const dual = fakturowniaMode(comp) === 'dual';
   const period = periodOf(view);
-  const invoices = store.listInvoices({
+  let invoices = store.listInvoices({
     companyId: view.companyId,
     dir: view.dir || undefined,
     unpaid: view.unpaid || undefined,
@@ -339,6 +347,8 @@ export function renderPage(el, deps) {
     to: period.to,
     limit: 300,
   });
+  if (view.noKsef) invoices = invoices.filter((i) => !i.ksefNumber && i.kind !== 'proforma');
+  if (view.noFv && dual) invoices = invoices.filter((i) => !i.fvId);
   view.selected = Math.min(view.selected, Math.max(0, invoices.length - 1));
   const fileMap = store.fileByInvoice(view.companyId);
 
@@ -348,6 +358,8 @@ export function renderPage(el, deps) {
         ${tabsHtml()}
         ${periodBarHtml(view)}
         <label><input type="checkbox" id="ksefadUnpaid" ${view.unpaid ? 'checked' : ''}> unpaid</label>
+        <label title="tylko faktury bez numeru KSeF"><input type="checkbox" id="ksefadNoKsef" ${view.noKsef ? 'checked' : ''}> bez KSeF</label>
+        ${dual ? `<label title="tylko faktury bez dokumentu w Fakturowni"><input type="checkbox" id="ksefadNoFv" ${view.noFv ? 'checked' : ''}> bez Fakt.</label>` : ''}
         <input id="ksefadQuery" placeholder="search… (/)" value="${esc(view.query)}" style="flex:1; min-width:120px">
         <button class="ksefad-btn" id="ksefadSync" ${view.busy ? 'disabled' : ''}>${view.busy === 'sync' ? 'Syncing…' : '⟳ Sync KSeF (r)'}</button>
         <button class="ksefad-btn primary" id="ksefadNew">+ New invoice (n)</button>
@@ -355,7 +367,7 @@ export function renderPage(el, deps) {
       ${view.error ? `<div class="ksefad-error">${esc(view.error)}</div>` : ''}
       <div class="ksefad-scroll">
         <table class="ksefad-table">
-          <thead><tr><th>Number</th><th>Date</th><th>Contractor</th><th>Gross</th><th>Status</th><th>KSeF</th><th>PDF</th></tr></thead>
+          <thead><tr><th>Number</th><th>Date</th><th>Contractor</th><th>Gross</th><th>Status</th><th>KSeF</th>${dual ? '<th>Fakt.</th>' : ''}<th>PDF</th></tr></thead>
           <tbody>
             ${invoices.map((inv, i) => `
               <tr data-id="${esc(inv.id)}" class="${i === view.selected ? 'sel' : ''}">
@@ -366,6 +378,7 @@ export function renderPage(el, deps) {
                 <td style="text-align:right">${zl(inv.gross, inv.currency)}</td>
                 <td>${payBadge(inv)}</td>
                 <td style="text-align:center">${ksefMark(inv)}</td>
+                ${dual ? `<td style="text-align:center">${fvMark(inv)}</td>` : ''}
                 <td style="text-align:center">${fileMap.has(inv.id)
                   ? `<button class="ksefad-btn" data-pdf="${esc(inv.id)}" title="Podgląd PDF">📄</button>`
                   : '<span class="ksefad-muted">—</span>'}</td>
@@ -391,6 +404,9 @@ export function renderPage(el, deps) {
   bindShellControls(el, deps);
   bindPeriodBar(el, view, () => renderPage(el, deps));
   el.querySelector('#ksefadUnpaid').onchange = (e) => { view.unpaid = e.target.checked; renderPage(el, deps); };
+  el.querySelector('#ksefadNoKsef').onchange = (e) => { view.noKsef = e.target.checked; renderPage(el, deps); };
+  const noFv = el.querySelector('#ksefadNoFv');
+  if (noFv) noFv.onchange = (e) => { view.noFv = e.target.checked; renderPage(el, deps); };
   el.querySelector('#ksefadSync').onclick = () => runSync(el, deps);
   el.querySelector('#ksefadNew').onclick = () => openCreateForm(el, deps);
   el.querySelectorAll('tbody tr').forEach((tr, i) => {
