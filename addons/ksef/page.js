@@ -1257,6 +1257,10 @@ export function renderUnpaidWidget(el, deps) {
 
 // ---- settings ----
 
+// Gmail accounts configured in the app — loaded once per settings render
+// for the "send reports as" combo
+let emailAccountsCache = [];
+
 function companyFormHtml(c = {}) {
   const fk = c.fakturownia || {};
   return `
@@ -1268,6 +1272,10 @@ function companyFormHtml(c = {}) {
       <label class="adk-field"><span>Rachunek bankowy</span><input data-f="bankAccount" value="${esc(c.bankAccount || '')}"></label>
       <label class="adk-field"><span>E-mail księgowej</span><input data-f="accountantEmail" type="email" value="${esc(c.accountantEmail || '')}" placeholder="ksiegowa@biuro.pl — cel raportów wysyłanych mailem"></label>
       <label class="adk-field"><span>E-maile CC raportów <small>(po przecinku)</small></span><input data-f="accountantCc" value="${esc(c.accountantCc || '')}" placeholder="ja@firma.pl, wspolnik@firma.pl"></label>
+      <label class="adk-field"><span>Wysyłka raportów z konta</span><select data-f="senderEmail">
+        <option value="">(pierwsze skonfigurowane konto Gmail)</option>
+        ${emailAccountsCache.map((a) => `<option value="${esc(a)}" ${a === c.senderEmail ? 'selected' : ''}>${esc(a)}</option>`).join('')}
+      </select></label>
       <label class="adk-field"><span>Wzorzec numeracji <small>(tylko gdy tryb Fakturownia: wyłączony)</small></span>
         <input data-f="numberingPattern" value="${esc(c.numberingPattern || '{nr}/{mm}/{yyyy}')}" title="{nr} kolejny numer, {mm} miesiąc, {yyyy} rok — w trybie dual numeruje Fakturownia wg własnego wzorca"></label>
       <label class="adk-field"><span>Środowisko KSeF</span><select data-f="env">
@@ -1305,6 +1313,14 @@ export function renderSettings(el, deps) {
   injectStyle();
   const { store } = deps;
   const companies = store.companies();
+  if (!emailAccountsCache.length) {
+    deps.cl.listEmailAccounts?.().then((accounts) => {
+      if (accounts?.length && !emailAccountsCache.length) {
+        emailAccountsCache = accounts;
+        renderSettings(el, deps);
+      }
+    }).catch((err) => deps.cl.log('email accounts load failed:', err));
+  }
   el.innerHTML = `
     <h2 class="settings-section-title">🧾 KSeF — polskie e-fakturowanie</h2>
     <p class="settings-section-desc">Firmy — każda z własnym NIP i tokenem KSeF. Pola Fakturowni
@@ -1349,6 +1365,7 @@ export function renderSettings(el, deps) {
       bankAccount: get('bankAccount'),
       accountantEmail: get('accountantEmail'),
       accountantCc: get('accountantCc'),
+      senderEmail: get('senderEmail'),
       numberingPattern: get('numberingPattern'),
       env: get('env') || 'prod',
       ksefToken: get('ksefToken'),

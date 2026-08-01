@@ -827,6 +827,7 @@ function openEmailModal(deps, company, { subject, bodyText, attachments }) {
   overlay.innerHTML = `
     <div class="ksefad-modal lg" style="width:min(640px, 92vw)">
       <h2 style="margin-bottom:6px">Wyślij do księgowej</h2>
+      <div class="ksefad-muted" style="margin-bottom:10px">Z konta: <b>${esc(company.senderEmail || 'pierwsze skonfigurowane konto Gmail')}</b> <span class="adk-muted">(zmiana w Ustawieniach firmy)</span></div>
       <div class="adk-form" style="grid-template-columns:1fr">
         <label class="adk-field"><span>Do</span><input id="emTo" type="email" value="${esc(company.accountantEmail || '')}" placeholder="ustaw e-mail księgowej w Ustawieniach firmy"></label>
         <label class="adk-field"><span>Temat</span><input id="emSubject" value="${esc(subject)}"></label>
@@ -862,6 +863,7 @@ function openEmailModal(deps, company, { subject, bodyText, attachments }) {
     btn.textContent = 'Wysyłam…';
     try {
       await deps.cl.sendEmail({
+        account: company.senderEmail || '',
         to,
         cc,
         subject: overlay.querySelector('#emSubject').value.trim(),

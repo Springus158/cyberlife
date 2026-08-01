@@ -9,7 +9,7 @@ import { registerAddonModule, unregisterAddonModules, switchToModuleId, switchAd
 import { registerAddonSettingsSection, removeAddonSettingsSections, refreshSettingsIfOpen } from './settings-dashboard.js';
 import { setBuiltinStates } from './addon-state.js';
 import { renderModuleBar, getModules, getVisibleModules } from './shell.js';
-import { AddonsList, AddonStorageAll, AddonStorageSet, AddonStorageDelete, AddonSendEmail } from '../../wailsjs/go/main/App.js';
+import { AddonsList, AddonStorageAll, AddonStorageSet, AddonStorageDelete, AddonSendEmail, GetGmailConfig } from '../../wailsjs/go/main/App.js';
 import { API_BASE } from './utils.js';
 
 const active = new Map(); // addon id -> { addon, dispose, cleanups }
@@ -325,6 +325,12 @@ function makeContext(addon, inst) {
         throw new Error(`htmltopdf: ${res.status} ${await res.text()}`);
       }
       return res.json();
+    },
+
+    // Configured Gmail account addresses — for "send as" pickers
+    async listEmailAccounts() {
+      const cfg = await GetGmailConfig();
+      return (cfg?.accounts || []).map((a) => a.email);
     },
 
     // Send an email through the app's Gmail integration; attachments are
