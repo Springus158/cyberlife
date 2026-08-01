@@ -668,9 +668,11 @@ function nonKsefInvoices(store, company, txs) {
   const from = dates[0];
   const to = dates[dates.length - 1];
   if (!from) return [];
+  // Sales first, then costs — the merged attachment and the report tables
+  // share this order
   return store.listInvoices({ companyId: company.id, from, to })
     .filter((i) => !i.ksefNumber && i.kind !== 'dw' && i.kind !== 'proforma')
-    .sort((a, b) => a.issueDate.localeCompare(b.issueDate));
+    .sort((a, b) => (a.dir === b.dir ? a.issueDate.localeCompare(b.issueDate) : (a.dir === 'sale' ? -1 : 1)));
 }
 
 async function printReport(deps, company, month, txs) {
@@ -706,9 +708,9 @@ async function printReport(deps, company, month, txs) {
       bankView.error = `Załącznik PDF nie powstał: ${err.message || err}`;
     }
   }
-  const extraSection = extraInvoices.length ? `
-      <h3 style="margin:22px 0 4px">Faktury spoza KSeF w tym okresie (${extraInvoices.length})</h3>
-      <div style="color:#555; margin-bottom:6px">Tych dokumentów nie ma w KSeF — ich obrazy ${withPdf.length ? 'są w załączonym pliku PDF, w kolejności jak niżej' : 'wymagają osobnego przekazania'}. ${mergedNote}</div>
+  // Lp runs through both tables so the numbers keep matching the page
+  // order of the merged attachment (sales first, then costs)
+  const invoiceTable = (list, offset) => `
       <table style="border-collapse:collapse; width:100%; font-size:11px">
         <thead><tr>
           <th style="border:1px solid #bbb; padding:3px 6px; text-align:left">Lp</th>
@@ -719,9 +721,9 @@ async function printReport(deps, company, month, txs) {
           <th style="border:1px solid #bbb; padding:3px 6px; text-align:left">PDF</th>
         </tr></thead>
         <tbody>
-          ${extraInvoices.map((i, n) => `
+          ${list.map((i, n) => `
             <tr${fileMap.has(i.id) ? '' : ' style="background:#f8dcdc"'}>
-              <td style="border:1px solid #bbb; padding:3px 6px">${n + 1}</td>
+              <td style="border:1px solid #bbb; padding:3px 6px">${offset + n + 1}</td>
               <td style="border:1px solid #bbb; padding:3px 6px">${esc(i.number || '—')}</td>
               <td style="border:1px solid #bbb; padding:3px 6px">${esc(i.issueDate)}</td>
               <td style="border:1px solid #bbb; padding:3px 6px">${esc(i.dir === 'cost' ? i.sellerName : i.buyerName)}</td>
@@ -729,7 +731,14 @@ async function printReport(deps, company, month, txs) {
               <td style="border:1px solid #bbb; padding:3px 6px">${fileMap.has(i.id) ? 'w załączniku' : 'BRAK PLIKU'}</td>
             </tr>`).join('')}
         </tbody>
-      </table>
+      </table>`;
+  const extraSales = extraInvoices.filter((i) => i.dir === 'sale');
+  const extraCosts = extraInvoices.filter((i) => i.dir === 'cost');
+  const extraSection = extraInvoices.length ? `
+      <h3 style="margin:22px 0 4px">Faktury spoza KSeF w tym okresie (${extraInvoices.length})</h3>
+      <div style="color:#555; margin-bottom:6px">Tych dokumentów nie ma w KSeF — ich obrazy ${withPdf.length ? 'są w załączonym pliku PDF, w kolejności jak niżej (najpierw przychody, potem wydatki)' : 'wymagają osobnego przekazania'}. ${mergedNote}</div>
+      ${extraSales.length ? `<h4 style="margin:10px 0 3px">Przychody (${extraSales.length})</h4>${invoiceTable(extraSales, 0)}` : ''}
+      ${extraCosts.length ? `<h4 style="margin:10px 0 3px">Wydatki (${extraCosts.length})</h4>${invoiceTable(extraCosts, extraSales.length)}` : ''}
       ${withoutPdf.length ? `<div style="color:#c0392b; margin-top:4px">Uwaga: ${withoutPdf.length} pozycji bez pliku PDF w archiwum.</div>` : ''}` : '';
   const legend = (color, label) =>
     `<span style="display:inline-block; padding:1px 10px; background:${color}; border:1px solid #bbb; margin-right:8px">${label}</span>`;
