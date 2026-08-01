@@ -10,6 +10,15 @@ import { lineNet, lineVat } from './fa3.js';
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const zl = (n, cur = 'PLN') => `${(Number(n) || 0).toFixed(2)} ${cur}`;
 
+function payBadge(inv) {
+  if (inv.kind === 'proforma') return '<span class="ksefad-muted">proforma</span>';
+  if (inv.paid) return '<span class="ksefad-badge paid">opłacona</span>';
+  if (Number(inv.paidAmount) > 0) {
+    return `<span class="ksefad-badge partial" title="opłacono ${zl(inv.paidAmount, inv.currency)} z ${zl(inv.gross, inv.currency)}">◐ częściowo</span>`;
+  }
+  return '<span class="ksefad-badge unpaid">nieopłacona</span>';
+}
+
 const STYLE_ID = 'ksefad-style';
 
 // Keyed by element id, not a module flag: a hot reload re-imports the module
@@ -19,39 +28,41 @@ function injectStyle() {
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
-    .ksefad { display:flex; flex-direction:column; gap:10px; height:100%; font-size: var(--fs-base, 13px); }
+    .ksefad { display:flex; flex-direction:column; gap:10px; height:100%; font-size: 14px; }
     .ksefad-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .ksefad-tabs { display:flex; gap:2px; }
-    .ksefad-tab { background:transparent; border:1px solid var(--border,#334155); color:inherit;
+    .ksefad-tab { background:transparent; border:1px solid var(--border, #45475a); color:inherit;
       border-radius:6px 6px 0 0; border-bottom:none; padding:6px 16px; cursor:pointer; font:inherit; opacity:.6; }
-    .ksefad-tab.active { opacity:1; border-color:#3b82f6; color:#3b82f6; font-weight:600; }
+    .ksefad-tab.active { opacity:1; border-color:var(--accent, #89b4fa); color:var(--accent, #89b4fa); font-weight:600; }
     .ksefad-bar select, .ksefad-bar input, .ksefad select, .ksefad input, .ksefad textarea {
-      background: var(--bg-input, #1e293b); color: inherit; border: 1px solid var(--border, #334155);
+      background: var(--bg-surface, #313244); color: inherit; border: 1px solid var(--border, #45475a);
       border-radius: 6px; padding: 5px 8px; font: inherit; }
-    .ksefad-btn { background: var(--bg-input, #1e293b); border: 1px solid var(--border, #334155);
+    .ksefad-btn { background: var(--bg-surface, #313244); border: 1px solid var(--border, #45475a);
       color: inherit; border-radius: 6px; padding: 5px 10px; cursor: pointer; font: inherit; }
-    .ksefad-btn:hover { border-color: #3b82f6; color: #3b82f6; }
-    .ksefad-btn.primary { border-color: #3b82f6; }
+    .ksefad-btn:hover { border-color: var(--accent, #89b4fa); color: var(--accent, #89b4fa); }
+    .ksefad-btn.primary { border-color: var(--accent, #89b4fa); }
     .ksefad-table { width:100%; border-collapse: collapse; }
-    .ksefad-table th { text-align:left; opacity:.6; font-weight:600; padding:4px 8px; border-bottom:1px solid var(--border,#334155); }
+    .ksefad-table th { text-align:left; opacity:.6; font-weight:600; padding:4px 8px; border-bottom:1px solid var(--border, #45475a); }
     .ksefad-table td { padding:5px 8px; border-bottom:1px solid rgba(128,128,128,.15); }
-    .ksefad-table tr.sel td, .ksefad-table tbody tr:hover td { background: rgba(59,130,246,.08); cursor:pointer; }
+    .ksefad-table tr.sel td, .ksefad-table tbody tr:hover td { background: rgba(137,180,250,.08); cursor:pointer; }
     .ksefad-scroll { overflow:auto; flex:1; min-height:0; }
     .ksefad-badge { font-size:.85em; border:1px solid; border-radius:10px; padding:0 7px; white-space:nowrap; }
-    .ksefad-badge.paid { color:#22c55e; border-color:#22c55e; }
-    .ksefad-badge.unpaid { color:#eab308; border-color:#eab308; }
-    .ksefad-badge.cost { color:#f87171; border-color:#f87171; }
-    .ksefad-badge.sale { color:#60a5fa; border-color:#60a5fa; }
+    .ksefad-badge.paid { color:var(--success, #a6e3a1); border-color:var(--success, #a6e3a1); }
+    .ksefad-badge.unpaid { color:var(--warning, #f9e2af); border-color:var(--warning, #f9e2af); }
+    .ksefad-badge.partial { color:var(--success, #a6e3a1); border-color:var(--success, #a6e3a1);
+      background:linear-gradient(90deg, rgba(166,227,161,.30) 50%, transparent 50%); }
+    .ksefad-badge.cost { color:var(--error, #f38ba8); border-color:var(--error, #f38ba8); }
+    .ksefad-badge.sale { color:var(--accent, #89b4fa); border-color:var(--accent, #89b4fa); }
     .ksefad-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:900;
       display:flex; align-items:center; justify-content:center; }
-    .ksefad-modal { background: var(--bg-panel, #0f172a); border:1px solid var(--border,#334155);
+    .ksefad-modal { background: var(--bg-secondary, #181825); border:1px solid var(--border, #45475a);
       border-radius:10px; padding:18px; width:min(720px, 92vw); max-height:88vh; overflow:auto; }
     .ksefad-modal.lg { width:min(1060px, 94vw); max-height:92vh; padding:32px 40px; font-size:15px; }
     .ksefad-modal.lg input, .ksefad-modal.lg select { padding:10px 12px; font-size:15px; border-radius:8px; }
     .ksefad-modal.lg .ksefad-btn { padding:10px 18px; font-size:15px; border-radius:8px; }
     .ksefad-modal.lg label { font-weight:600; }
     .ksefad-doc-head { display:flex; justify-content:space-between; align-items:baseline; gap:16px;
-      border-bottom:1px solid var(--border,#334155); padding-bottom:14px; margin-bottom:16px; }
+      border-bottom:1px solid var(--border, #45475a); padding-bottom:14px; margin-bottom:16px; }
     .ksefad-doc-head h2 { font-size:22px; margin:0; }
     .ksefad-doc-dates div { margin-bottom:4px; }
     .ksefad-doc-parties { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:18px 0; }
@@ -59,11 +70,11 @@ function injectStyle() {
     .ksefad-doc-party .ksefad-party-name { font-size:17px; font-weight:700; margin-bottom:4px; }
     .ksefad-doc-table { width:100%; border-collapse:collapse; margin:16px 0; font-size:15px; }
     .ksefad-doc-table th { background:rgba(128,128,128,.12); font-weight:600; text-align:left;
-      padding:10px 12px; border:1px solid var(--border,#334155); }
-    .ksefad-doc-table td { padding:10px 12px; border:1px solid var(--border,#334155); }
+      padding:10px 12px; border:1px solid var(--border, #45475a); }
+    .ksefad-doc-table td { padding:10px 12px; border:1px solid var(--border, #45475a); }
     .ksefad-doc-totals { margin-left:auto; width:max-content; font-size:16px; margin-bottom:16px; }
     .ksefad-doc-totals div { display:flex; justify-content:flex-end; gap:24px; padding:3px 0; }
-    .ksefad-doc-totals .ksefad-doc-due { font-size:19px; font-weight:700; border-top:1px solid var(--border,#334155);
+    .ksefad-doc-totals .ksefad-doc-due { font-size:19px; font-weight:700; border-top:1px solid var(--border, #45475a);
       padding-top:8px; margin-top:6px; }
     .ksefad-grid { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
     .ksefad-modal.lg .ksefad-grid { gap:14px 18px; }
@@ -71,7 +82,7 @@ function injectStyle() {
     .ksefad-modal.lg .ksefad-lines td { padding:4px; }
     .ksefad-modal.lg .ksefad-lines input, .ksefad-modal.lg .ksefad-lines select { padding:9px 10px; }
     .ksefad-muted { opacity:.6; }
-    .ksefad-error { color:#f87171; white-space:pre-wrap; }
+    .ksefad-error { color:var(--error, #f38ba8); white-space:pre-wrap; }
     .ksefad-widget { display:flex; flex-direction:column; gap:4px; font-size:.95em; }
     .ksefad-widget-row { display:flex; justify-content:space-between; gap:8px; }
     .ksefad-widget-row span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -153,8 +164,7 @@ export function renderPage(el, deps) {
                 <td>${esc(inv.issueDate)}</td>
                 <td>${esc(inv.dir === 'sale' ? inv.buyerName : inv.sellerName)}</td>
                 <td style="text-align:right">${zl(inv.gross, inv.currency)}</td>
-                <td>${inv.kind === 'proforma' ? '<span class="ksefad-muted">proforma</span>'
-                  : `<span class="ksefad-badge ${inv.paid ? 'paid' : 'unpaid'}">${inv.paid ? 'paid' : 'unpaid'}</span>`}</td>
+                <td>${payBadge(inv)}</td>
                 <td class="ksefad-muted">${inv.ksefNumber ? '✓' : (inv.sendState === 'error' ? '⚠' : '—')}</td>
               </tr>`).join('')}
           </tbody>
@@ -265,9 +275,12 @@ function openDetail(el, deps, id) {
         <div><span>Wartość netto</span><span>${zl(inv.net, inv.currency)}</span></div>
         <div><span>Wartość VAT</span><span>${zl(inv.vat, inv.currency)}</span></div>
         <div><span>Wartość brutto</span><span><b>${zl(inv.gross, inv.currency)}</b></span></div>
-        ${inv.kind !== 'proforma' ? `
-          <div><span>Kwota opłacona</span><span>${zl(inv.paid ? inv.gross : 0, inv.currency)}${inv.paidDate ? ` <span class="ksefad-muted">(${esc(inv.paidDate)})</span>` : ''}</span></div>
-          <div class="ksefad-doc-due"><span>Do zapłaty</span><span>${zl(inv.paid ? 0 : inv.gross, inv.currency)}</span></div>` : ''}
+        ${inv.kind !== 'proforma' ? (() => {
+          const paidAmt = inv.paid ? inv.gross : (Number(inv.paidAmount) || 0);
+          return `
+          <div><span>Kwota opłacona</span><span>${zl(paidAmt, inv.currency)}${inv.paidDate ? ` <span class="ksefad-muted">(${esc(inv.paidDate)})</span>` : ''}</span></div>
+          <div class="ksefad-doc-due"><span>Do zapłaty</span><span>${zl(Math.max(0, inv.gross - paidAmt), inv.currency)}</span></div>`;
+        })() : ''}
       </div>
       <div class="ksefad-muted" style="margin-bottom:14px">
         ${inv.ksefNumber ? `Numer KSeF: <b>${esc(inv.ksefNumber)}</b>` : `KSeF: ${esc(inv.sendState || '—')}`}
@@ -644,13 +657,14 @@ export function renderTodayWidget(el, deps) {
 export function renderUnpaidWidget(el, deps) {
   injectStyle();
   const items = deps.store.listInvoices({ dir: 'sale', unpaid: true }).slice(0, 8);
-  const sum = items.reduce((s, i) => s + (i.currency === 'PLN' ? i.gross : 0), 0);
+  const remaining = (i) => Math.max(0, i.gross - (Number(i.paidAmount) || 0));
+  const sum = items.reduce((s, i) => s + (i.currency === 'PLN' ? remaining(i) : 0), 0);
   el.innerHTML = items.length
     ? `<div class="ksefad-widget">
         ${items.map((i) => `
           <div class="ksefad-widget-row">
-            <span title="${esc(i.number)}">${esc(i.buyerName || i.number)}</span>
-            <span>${zl(i.gross, i.currency)}</span>
+            <span title="${esc(i.number)}">${Number(i.paidAmount) > 0 ? '◐ ' : ''}${esc(i.buyerName || i.number)}</span>
+            <span>${zl(remaining(i), i.currency)}</span>
           </div>`).join('')}
         <div class="ksefad-widget-row" style="border-top:1px solid rgba(128,128,128,.3); padding-top:3px">
           <span>total</span><b>${zl(sum)}</b>
@@ -665,21 +679,21 @@ export function renderUnpaidWidget(el, deps) {
 function companyFormHtml(c = {}) {
   const fk = c.fakturownia || {};
   return `
-    <div class="ksefad-grid">
-      <label>Company name<br><input data-f="name" value="${esc(c.name || '')}" style="width:100%"></label>
-      <label>NIP<br><input data-f="nip" value="${esc(c.nip || '')}" style="width:100%"></label>
-      <label>Address line 1<br><input data-f="address1" value="${esc(c.address1 || '')}" style="width:100%"></label>
-      <label>Address line 2<br><input data-f="address2" value="${esc(c.address2 || '')}" style="width:100%"></label>
-      <label>Bank account<br><input data-f="bankAccount" value="${esc(c.bankAccount || '')}" style="width:100%"></label>
-      <label>Numbering pattern <span class="ksefad-muted" style="font-weight:400">(tylko gdy tryb Fakturownia: wyłączony)</span><br>
-        <input data-f="numberingPattern" value="${esc(c.numberingPattern || '{nr}/{mm}/{yyyy}')}" style="width:100%" title="{nr} sequence, {mm} month, {yyyy} year — w trybie dual numeruje Fakturownia wg własnego wzorca"></label>
-      <label>KSeF environment<br><select data-f="env" style="width:100%">
+    <div class="adk-form">
+      <label class="adk-field"><span>Nazwa firmy</span><input data-f="name" value="${esc(c.name || '')}"></label>
+      <label class="adk-field"><span>NIP</span><input data-f="nip" value="${esc(c.nip || '')}"></label>
+      <label class="adk-field"><span>Adres — linia 1</span><input data-f="address1" value="${esc(c.address1 || '')}" placeholder="ulica i numer"></label>
+      <label class="adk-field"><span>Adres — linia 2</span><input data-f="address2" value="${esc(c.address2 || '')}" placeholder="kod i miejscowość"></label>
+      <label class="adk-field"><span>Rachunek bankowy</span><input data-f="bankAccount" value="${esc(c.bankAccount || '')}"></label>
+      <label class="adk-field"><span>Wzorzec numeracji <small>(tylko gdy tryb Fakturownia: wyłączony)</small></span>
+        <input data-f="numberingPattern" value="${esc(c.numberingPattern || '{nr}/{mm}/{yyyy}')}" title="{nr} kolejny numer, {mm} miesiąc, {yyyy} rok — w trybie dual numeruje Fakturownia wg własnego wzorca"></label>
+      <label class="adk-field"><span>Środowisko KSeF</span><select data-f="env">
         ${['prod', 'demo', 'test'].map((e) => `<option ${e === (c.env || 'prod') ? 'selected' : ''}>${e}</option>`).join('')}
       </select></label>
-      <label>KSeF token<br><input data-f="ksefToken" type="password" value="${esc(c.ksefToken || '')}" style="width:100%"></label>
-      <label>Fakturownia subdomain<br><input data-f="fk_subdomain" value="${esc(fk.subdomain || '')}" style="width:100%" placeholder="mycompany (.fakturownia.pl)"></label>
-      <label>Fakturownia API token<br><input data-f="fk_token" type="password" value="${esc(fk.token || '')}" style="width:100%"></label>
-      <label>Tryb Fakturownia<br><select data-f="fk_mode" style="width:100%"
+      <label class="adk-field"><span>Token KSeF</span><input data-f="ksefToken" type="password" value="${esc(c.ksefToken || '')}"></label>
+      <label class="adk-field"><span>Fakturownia — subdomena</span><input data-f="fk_subdomain" value="${esc(fk.subdomain || '')}" placeholder="mojafirma (.fakturownia.pl)"></label>
+      <label class="adk-field"><span>Fakturownia — token API</span><input data-f="fk_token" type="password" value="${esc(fk.token || '')}"></label>
+      <label class="adk-field"><span>Tryb Fakturownia</span><select data-f="fk_mode"
         title="Dual: faktury tworzone tutaj powstają też w Fakturowni (jej numeracja), wysyłka do KSeF idzie przez Fakturownię, płatności synchronizują się w obie strony. Wyłączony: aplikacja rozmawia z KSeF bezpośrednio.">
         <option value="dual" ${(fk.mode || 'dual') !== 'off' ? 'selected' : ''}>Dual — synchronizacja dwustronna</option>
         <option value="off" ${fk.mode === 'off' ? 'selected' : ''}>Wyłączony — tylko KSeF</option>
@@ -689,18 +703,18 @@ function companyFormHtml(c = {}) {
 
 function fvInfoHtml(info) {
   if (!info) {
-    return '<span class="ksefad-muted">Parametry konta nie zostały jeszcze pobrane — kliknij „Odśwież" albo uruchom import.</span>';
+    return '<span class="adk-muted">Parametry konta nie zostały jeszcze pobrane — kliknij „Odśwież" albo uruchom import.</span>';
   }
   const s = info.seller || {};
   const patterns = Object.entries(info.patterns || {}).filter(([, v]) => v);
   return `
-    <div style="display:flex; flex-direction:column; gap:4px; margin-top:8px">
+    <div class="adk-kv">
       <div><b>Konto:</b> ${esc(info.account?.prefix || '?')}.fakturownia.pl · plan ${esc(info.account?.plan || '—')} · ${esc(String(info.account?.invoices ?? '—'))} dokumentów</div>
       ${s.name ? `<div><b>Sprzedawca:</b> ${esc(s.name)} · NIP ${esc(s.nip || '—')}</div>
-      <div class="ksefad-muted">${esc(s.street || '')}${s.street ? ', ' : ''}${esc(s.postCode || '')} ${esc(s.city || '')}${s.email ? ` · ${esc(s.email)}` : ''}</div>
-      ${s.bankAccount ? `<div class="ksefad-muted">Bank: ${esc(s.bank || '')} ${esc(s.bankAccount)}</div>` : ''}` : ''}
+      <div class="adk-muted">${esc(s.street || '')}${s.street ? ', ' : ''}${esc(s.postCode || '')} ${esc(s.city || '')}${s.email ? ` · ${esc(s.email)}` : ''}</div>
+      ${s.bankAccount ? `<div class="adk-muted">Bank: ${esc(s.bank || '')} ${esc(s.bankAccount)}</div>` : ''}` : ''}
       ${patterns.length ? `<div><b>Wzorce numeracji:</b> ${patterns.map(([k, v]) => `${esc(k)}: <code>${esc(v)}</code>`).join(' · ')}</div>` : ''}
-      <div class="ksefad-muted" style="font-size:.9em">Pobrano ${esc(String(info.fetchedAt || '').replace('T', ' ').slice(0, 19))}</div>
+      <div class="adk-muted" style="font-size:.9em">Pobrano ${esc(String(info.fetchedAt || '').replace('T', ' ').slice(0, 19))}</div>
     </div>`;
 }
 
@@ -709,37 +723,36 @@ export function renderSettings(el, deps) {
   const { store } = deps;
   const companies = store.companies();
   el.innerHTML = `
-    <h2 class="settings-section-title">🧾 KSeF — Polish e-invoicing</h2>
-    <p class="settings-section-desc">Companies (each with its own NIP + KSeF token).
-    The Fakturownia fields enable the one-time history import.</p>
+    <h2 class="settings-section-title">🧾 KSeF — polskie e-fakturowanie</h2>
+    <p class="settings-section-desc">Firmy — każda z własnym NIP i tokenem KSeF. Pola Fakturowni
+    włączają import historii oraz tryb dual (dwustronna synchronizacja).</p>
     <div id="ksefadCompanies">
       ${companies.map((c) => `
-        <details class="ksefad" style="margin-bottom:10px" data-id="${esc(c.id)}">
-          <summary style="cursor:pointer"><b>${esc(c.name)}</b> · NIP ${esc(c.nip || '—')}
-            ${store.syncState(c.id).fakturowniaImportedAt ? ' · imported ✓' : ''}</summary>
-          <div style="padding:8px 0">${companyFormHtml(c)}
-            <div class="ksefad-bar" style="margin-top:8px">
-              <button class="ksefad-btn ksefadSaveCompany">Save</button>
-              <button class="ksefad-btn ksefadImport">Import from Fakturownia</button>
-              <button class="ksefad-btn ksefadTestKsef">Test KSeF auth</button>
-              <span style="flex:1"></span>
-              <button class="ksefad-btn ksefadDelete">Delete</button>
-            </div>
-            <div class="ksefad-status ksefad-muted"></div>
-            ${(c.fakturownia?.subdomain && c.fakturownia?.token) ? `
-              <div style="margin-top:10px; border:1px solid var(--border,#334155); border-radius:8px; padding:10px 12px">
-                <div style="display:flex; align-items:center; gap:8px">
-                  <b>Parametry Fakturowni</b>
-                  <span class="ksefad-muted">tylko do odczytu — edycja w Fakturowni</span>
-                  <span style="flex:1"></span>
-                  <button class="ksefad-btn ksefadFvRefresh">Odśwież</button>
-                </div>
-                <div class="ksefad-fvinfo">${fvInfoHtml(store.fvInfo(c.id))}</div>
-              </div>` : ''}
+        <details class="adk-card" data-id="${esc(c.id)}" ${companies.length === 1 ? 'open' : ''}>
+          <summary><b>${esc(c.name)}</b> <span class="adk-muted">· NIP ${esc(c.nip || '—')}
+            ${store.syncState(c.id).fakturowniaImportedAt ? ' · zaimportowano ✓' : ''}</span></summary>
+          ${companyFormHtml(c)}
+          <div class="adk-actions">
+            <button class="adk-btn primary ksefadSaveCompany">Zapisz</button>
+            <button class="adk-btn ksefadImport">Import z Fakturowni</button>
+            <button class="adk-btn ksefadTestKsef">Test połączenia z KSeF</button>
+            <span style="flex:1"></span>
+            <button class="adk-btn danger ksefadDelete">Usuń</button>
           </div>
+          <div class="ksefad-status adk-status"></div>
+          ${(c.fakturownia?.subdomain && c.fakturownia?.token) ? `
+            <div class="adk-subcard">
+              <div class="adk-subcard-head">
+                <b>Parametry Fakturowni</b>
+                <span class="adk-muted">tylko do odczytu — edycja w Fakturowni</span>
+                <span style="flex:1"></span>
+                <button class="adk-btn ksefadFvRefresh">Odśwież</button>
+              </div>
+              <div class="ksefad-fvinfo">${fvInfoHtml(store.fvInfo(c.id))}</div>
+            </div>` : ''}
         </details>`).join('')}
     </div>
-    <button class="ksefad-btn" id="ksefadAddCompany">+ Add company</button>
+    <button class="adk-btn" id="ksefadAddCompany">+ Dodaj firmę</button>
     <div id="ksefadNewCompany"></div>`;
 
   const readForm = (container, id) => {
@@ -764,10 +777,10 @@ export function renderSettings(el, deps) {
     box.querySelector('.ksefadSaveCompany').onclick = async () => {
       await store.saveCompany(readForm(box, id));
       clearTokenCache(id);
-      status.textContent = 'Saved.';
+      status.textContent = 'Zapisano.';
     };
     box.querySelector('.ksefadDelete').onclick = async () => {
-      if (!confirm('Delete this company configuration? (invoice data stays in storage)')) return;
+      if (!confirm('Usunąć konfigurację tej firmy? (dane faktur zostają w storage)')) return;
       await store.deleteCompany(id);
       renderSettings(el, deps);
     };
@@ -777,11 +790,11 @@ export function renderSettings(el, deps) {
       await store.saveCompany(company);
       try {
         const res = await importFromFakturownia(deps, company,
-          ({ page, total }) => { status.textContent = `Importing… page ${page}, ${total} invoices`; });
-        status.textContent = `Import done: ${res.total} fetched, ${res.added} new, ${res.updated} updated.`;
+          ({ page, total }) => { status.textContent = `Import… strona ${page}, ${total} faktur`; });
+        status.textContent = `Import zakończony: pobrano ${res.total}, nowych ${res.added}, zaktualizowanych ${res.updated}.`;
       } catch (err) {
         deps.cl.log('fakturownia import failed:', err);
-        status.textContent = `Import failed: ${err.message || err}`;
+        status.textContent = `Import nieudany: ${err.message || err}`;
       }
       e.target.disabled = false;
     };
@@ -801,13 +814,13 @@ export function renderSettings(el, deps) {
       const company = readForm(box, id);
       await store.saveCompany(company);
       clearTokenCache(id);
-      status.textContent = 'Authenticating with KSeF…';
+      status.textContent = 'Uwierzytelnianie w KSeF…';
       try {
         await syncCompany(deps, company);
-        status.textContent = `KSeF OK — sync completed (${store.listInvoices({ companyId: id }).length} invoices total).`;
+        status.textContent = `KSeF OK — synchronizacja zakończona (łącznie ${store.listInvoices({ companyId: id }).length} faktur).`;
       } catch (err) {
         deps.cl.log('ksef test failed:', err);
-        status.textContent = `KSeF auth/sync failed: ${err.message || err}`;
+        status.textContent = `Błąd KSeF: ${err.message || err}`;
       }
       e.target.disabled = false;
     };
@@ -815,8 +828,8 @@ export function renderSettings(el, deps) {
 
   el.querySelector('#ksefadAddCompany').onclick = () => {
     const holder = el.querySelector('#ksefadNewCompany');
-    holder.innerHTML = `<div style="margin-top:10px">${companyFormHtml()}
-      <button class="ksefad-btn" id="ksefadCreateCompany" style="margin-top:8px">Create</button></div>`;
+    holder.innerHTML = `<div class="adk-card" style="margin-top:12px">${companyFormHtml()}
+      <div class="adk-actions"><button class="adk-btn primary" id="ksefadCreateCompany">Utwórz</button></div></div>`;
     holder.querySelector('#ksefadCreateCompany').onclick = async () => {
       const company = readForm(holder, `c${Date.now()}`);
       if (!company.name) return;

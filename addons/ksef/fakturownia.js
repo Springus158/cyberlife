@@ -186,6 +186,7 @@ function mapInvoice(f, company) {
     gross: Number(f.price_gross) || 0,
     currency: f.currency || 'PLN',
     paid: isPaid(f),
+    paidAmount: Number(f.paid) || 0,
     paidDate: f.paid_date || '',
     kind: f.kind || 'vat',
   };

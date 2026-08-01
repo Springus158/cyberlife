@@ -7770,3 +7770,129 @@ body.wails-fullscreen .titlebar-drag-region {
   gap: 0.6em;
   align-items: center;
 }
+
+/* ================= Addon UI kit =================
+   Shared building blocks for addon pages and settings sections, built on
+   the app design tokens above. Addons must use these (or the tokens
+   directly) instead of hardcoding colors — see docs/AGENT-MANUAL.md. */
+
+.adk-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 14px;
+  max-width: 72em;
+}
+
+.adk-card > summary {
+  cursor: pointer;
+  font-size: 15px;
+  padding: 2px 0;
+  user-select: none;
+}
+
+.adk-card > summary b { color: var(--text-primary); }
+
+.adk-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px 22px;
+  margin: 14px 0;
+}
+
+.adk-field { display: flex; flex-direction: column; gap: 6px; }
+
+.adk-field > span {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.adk-field > span small { font-weight: 400; color: var(--text-muted); }
+
+.adk-field input,
+.adk-field select,
+.adk-field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.adk-field input:focus,
+.adk-field select:focus,
+.adk-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.adk-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.adk-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.adk-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.adk-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary);
+  font-weight: 600;
+}
+
+.adk-btn.primary:hover { background: var(--accent-hover); color: var(--bg-primary); }
+
+.adk-btn.danger:hover { border-color: var(--error); color: var(--error); }
+
+.adk-btn:disabled { opacity: 0.5; cursor: default; }
+
+.adk-subcard {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 16px;
+}
+
+.adk-subcard-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.adk-subcard-head b { font-size: 14px; }
+
+.adk-kv { display: flex; flex-direction: column; gap: 5px; font-size: 13.5px; }
+
+.adk-kv b { color: var(--text-secondary); font-weight: 600; }
+
+.adk-kv code {
+  background: var(--bg-surface);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12.5px;
+}
+
+.adk-muted { color: var(--text-muted); }
+
+.adk-status { color: var(--text-muted); font-size: 13px; margin-top: 10px; min-height: 1.2em; }

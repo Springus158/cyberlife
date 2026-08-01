@@ -128,6 +128,20 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
 4. Never put secrets in addon files; keep values in `cl.storage`.
 5. Keyboard-first applies to addon pages too: implement `onKey`, return
    `true` for consumed keys, let Esc bubble.
+6. **UI must use the app design system** — the tokens from `app.css`
+   (`--bg-primary/secondary/tertiary/surface`, `--text-primary/secondary/muted`,
+   `--accent`, `--success`, `--warning`, `--error`, `--border`) and the
+   shared **addon UI kit** classes (`app.css`, section "Addon UI kit"):
+   - `.adk-card` — a section/entity card (works as `<details>` too);
+     `.adk-subcard` — nested read-only panel with `.adk-subcard-head`
+   - `.adk-form` + `.adk-field` (`<label class="adk-field"><span>Label</span>
+     <input></label>`) — responsive two-column form with consistent inputs
+   - `.adk-actions` + `.adk-btn` (`.primary`, `.danger`) — button rows
+   - `.adk-kv`, `.adk-muted`, `.adk-status` — key-value info and status lines
+   Never hardcode palette colors in addon CSS; when a bespoke style is
+   unavoidable, reference the tokens with a matching fallback, e.g.
+   `var(--accent, #89b4fa)`. This keeps every addon coherent with the app
+   and with future theme changes.
 
 ## Checklist: add a CORE module (full-screen view)
 

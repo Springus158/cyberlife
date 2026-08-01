@@ -120,9 +120,11 @@ export function createStore(cl) {
     // payments, so its records must never clear a local flag.
     if (incoming.src === 'fakturownia') {
       merged.paid = incoming.paid || false;
+      merged.paidAmount = incoming.paidAmount ?? 0;
       merged.paidDate = incoming.paidDate || '';
     } else {
       merged.paid = existing.paid || incoming.paid || false;
+      merged.paidAmount = existing.paidAmount ?? incoming.paidAmount ?? 0;
       merged.paidDate = existing.paidDate || incoming.paidDate || '';
     }
     merged.lines = existing.lines || incoming.lines;

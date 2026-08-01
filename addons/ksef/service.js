@@ -198,6 +198,7 @@ export async function setPaid(deps, company, invoiceId, paid, paidDate) {
   }
   return store.updateInvoice(invoiceId, {
     paid: Boolean(paid),
+    paidAmount: paid ? inv.gross : 0,
     paidDate: paid ? (paidDate || today()) : '',
   });
 }
