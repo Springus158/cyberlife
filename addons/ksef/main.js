@@ -344,7 +344,7 @@ export default async function activate(cl) {
       }
       let list = [...byId.values()].sort((a, b) => a.account.localeCompare(b.account)
         || a.date.slice(0, 7).localeCompare(b.date.slice(0, 7)) || (a.seq ?? 0) - (b.seq ?? 0));
-      list = matchTransactions(list, invoices);
+      list = matchTransactions(list, invoices, { accounts: store.clientAccounts(company.id) });
       await store.saveBankMonth(company.id, mo, list);
       months[mo] = { total: list.length, added, matched: list.filter((t) => t.invoiceId).length };
     }

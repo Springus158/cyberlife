@@ -3,8 +3,9 @@
 // by hand (or a category for non-invoice entries) and print the monthly
 // report for the accountant.
 
-import { parseStatement, matchTransactions, categorize } from './bank.js';
+import { parseStatement, matchTransactions, categorize, counterAccount, buildAccountIndex } from './bank.js';
 import { setPaid } from './service.js';
+import { fakturowniaMode, createDwInFakturownia } from './fakturownia.js';
 import {
   injectStyle, currentMonth, monthAdd, monthLabel, periodBarHtml, bindPeriodBar, periodOf, printDocHtml, invDesc,
   activeCompany,
@@ -62,38 +63,6 @@ function fmtAccount(acc) {
   return String(acc || '').replace(/(\d{2})(?=(\d{4})+$)/, '$1 ').replace(/(\d{4})(?=\d)/g, '$1 ');
 }
 
-// Counterparty account from the operation description (PL NRB or IBAN),
-// normalized for comparison against the client-accounts register
-function normAcct(s) {
-  let t = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (/^PL\d{26}$/.test(t)) t = t.slice(2);
-  return t;
-}
-
-// Statement descriptions carry the counterparty account inline, without
-// any label — a 26-digit NRB (spaced in groups of 4) or an IBAN with a
-// known country prefix; card reference numbers are 23 digits so they
-// never collide with the NRB shape
-const NRB_RE = /\b\d{2}(?: ?\d{4}){6}\b/;
-// Foreign IBANs appear as one unbroken token in iPKO descriptions
-const IBAN_RE = /(?:^|[^A-Z0-9])((?:GB|DE|IE|NL|FR|ES|IT|CZ|SK|LT|LV|EE|BE|AT|CH|SE|NO|DK|FI|LU|PT|HR|SI|HU|RO|BG|GR|MT|CY)\d{2}[A-Z0-9]{10,30})(?![A-Z0-9])/;
-
-function counterAccount(desc) {
-  const d = String(desc || '');
-  const nrb = NRB_RE.exec(d);
-  if (nrb) return normAcct(nrb[0]);
-  const iban = IBAN_RE.exec(d);
-  return iban ? normAcct(iban[1]) : '';
-}
-
-function clientAcctMap(store, company) {
-  const map = new Map();
-  for (const e of store.clientAccounts(company.id)) {
-    for (const a of e.accounts || []) map.set(normAcct(a), e.name);
-  }
-  return map;
-}
-
 function invoiceLabel(store, id) {
   const inv = id ? store.getInvoice(id) : null;
   if (!inv) return '';
@@ -138,8 +107,8 @@ export function renderBankPage(el, deps) {
     t.invoiceId ? invoiceLabel(store, t.invoiceId) : '',
     txClient(t),
   ].some((v) => String(v || '').toLowerCase().includes(q));
-  const acctMap = company ? clientAcctMap(store, company) : new Map();
-  const txClient = (t) => acctMap.get(counterAccount(t.desc)) || '';
+  const acctIndex = company ? buildAccountIndex(store.clientAccounts(company.id)) : new Map();
+  const txClient = (t) => acctIndex.get(counterAccount(t.desc))?.name || '';
   const shown = txs.filter((t) => bankView.show[txState(t)] && matchesQuery(t));
   // No paging on purpose (desktop app, a few thousand rows render fine) —
   // the cap only guards against an unbounded future archive
@@ -252,6 +221,7 @@ export function renderBankPage(el, deps) {
     const cleared = matchTransactions(
       txs.map((t) => (t.auto ? { ...t, invoiceId: '', matchedBy: '', category: '' } : t)),
       invoices,
+      { accounts: store.clientAccounts(company.id) },
     );
     for (const t of cleared) await patchTx(store, company, t, t);
     rerender();
@@ -298,10 +268,122 @@ export function renderBankPage(el, deps) {
   el.querySelectorAll('[data-category]').forEach((sel) => {
     sel.onchange = async () => {
       const tx = txs.find((t) => t.id === sel.dataset.category);
-      if (tx) await patchTx(store, company, tx, { category: sel.value, auto: false });
+      if (!tx) return;
+      // In dual mode a payroll/tax categorization becomes a Fakturownia
+      // DW document, so their expense reports stay complete
+      if (DW_CATEGORIES.includes(sel.value) && fakturowniaMode(company) === 'dual') {
+        openDwModal(el, deps, company, tx, sel.value, txClient(tx));
+        return;
+      }
+      await patchTx(store, company, tx, { category: sel.value, auto: false });
       rerender();
     };
   });
+}
+
+const DW_CATEGORIES = ['wynagrodzenie', 'podatek / ZUS'];
+
+function dwCounterpartyGuess(tx, clientName) {
+  if (clientName) return clientName;
+  const d = `${tx.type} ${tx.desc}`.toUpperCase();
+  if (/ZUS|UBEZPIECZE/.test(d)) return 'Zakład Ubezpieczeń Społecznych';
+  if (/URZAD SKARBOWY|US URZAD|PODATEK|VAT-7|PIT|CIT/.test(d)) return 'Urząd Skarbowy';
+  return '';
+}
+
+function openDwModal(el, deps, company, tx, category, clientName) {
+  const { store } = deps;
+  const monthLbl = tx.date.slice(0, 7).split('-').reverse().join('/');
+  const defaultPos = category === 'wynagrodzenie'
+    ? `Wynagrodzenie ${monthLbl}`
+    : `Podatek / ZUS ${monthLbl}`;
+  const overlay = document.createElement('div');
+  overlay.className = 'ksefad-overlay modal-overlay';
+  overlay.innerHTML = `
+    <div class="ksefad-modal lg" style="width:min(560px, 92vw)">
+      <h2 style="margin-bottom:6px">Dowód wewnętrzny w Fakturowni</h2>
+      <div class="ksefad-muted" style="margin-bottom:14px">Operacja ${esc(tx.date)} · ${money(tx.amount, tx.currency)} —
+        kategoria „${esc(category)}" utworzy DW w Fakturowni i sparuje go z tą operacją.</div>
+      <div class="adk-form">
+        <label class="adk-field"><span>Kontrahent</span><input id="dwWho" value="${esc(dwCounterpartyGuess(tx, clientName))}"></label>
+        <label class="adk-field"><span>Nazwa pozycji</span><input id="dwPos" value="${esc(defaultPos)}"></label>
+        <label class="adk-field"><span>Kwota</span><input value="${Math.abs(tx.amount).toFixed(2)} ${esc(tx.currency)}" disabled></label>
+        <label class="adk-field"><span>Data (z operacji)</span><input value="${esc(tx.date)}" disabled></label>
+      </div>
+      <div class="adk-actions">
+        <span class="ksefad-error" id="dwError"></span>
+        <span style="flex:1"></span>
+        <button class="adk-btn primary" id="dwCreate">Utwórz DW i sparuj</button>
+        <button class="adk-btn" id="dwOnlyCat">Tylko kategoria (bez DW)</button>
+        <button class="adk-btn" id="dwCancel">Anuluj</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('#dwCancel').onclick = () => { close(); renderBankPage(el, deps); };
+  overlay.querySelector('#dwOnlyCat').onclick = async () => {
+    await patchTx(store, company, tx, { category, auto: false });
+    close();
+    renderBankPage(el, deps);
+  };
+  overlay.querySelector('#dwCreate').onclick = async () => {
+    const who = overlay.querySelector('#dwWho').value.trim();
+    if (!who) {
+      overlay.querySelector('#dwError').textContent = 'Kontrahent jest wymagany';
+      return;
+    }
+    const btn = overlay.querySelector('#dwCreate');
+    btn.disabled = true;
+    btn.textContent = 'Tworzę…';
+    try {
+      const doc = await createDwInFakturownia(deps, company, {
+        issueDate: tx.date,
+        paidDate: tx.date,
+        currency: tx.currency,
+        counterparty: who,
+        gross: Math.abs(tx.amount),
+        positionName: overlay.querySelector('#dwPos').value.trim() || defaultPos,
+      });
+      // Same identity the Fakturownia import uses, so the next sync merges
+      // instead of duplicating
+      const record = {
+        id: `fv:${company.id}:${doc.id}`,
+        src: 'fakturownia',
+        dir: 'cost',
+        kind: 'dw',
+        number: doc.number || '',
+        fvId: doc.id,
+        issueDate: tx.date,
+        sellerNip: '',
+        sellerName: who,
+        buyerNip: company.nip,
+        buyerName: company.name,
+        net: Math.abs(tx.amount),
+        vat: 0,
+        gross: Math.abs(tx.amount),
+        currency: tx.currency,
+        paid: true,
+        paidDate: tx.date,
+      };
+      await store.upsertInvoices(company.id, [record]);
+      await patchTx(store, company, tx, {
+        invoiceId: record.id,
+        matchedBy: `DW ${doc.number || doc.id} (z wyciągu)`,
+        category: '',
+        auto: false,
+      });
+      bankView.info = `✓ Utworzono ${doc.number || `DW #${doc.id}`} w Fakturowni (${who}, ${money(Math.abs(tx.amount), tx.currency)}) i sparowano z operacją ${tx.date}.`;
+      bankView.error = '';
+      close();
+      renderBankPage(el, deps);
+    } catch (err) {
+      deps.cl.log('DW create failed:', err);
+      btn.disabled = false;
+      btn.textContent = 'Utwórz DW i sparuj';
+      overlay.querySelector('#dwError').textContent = `Fakturownia odrzuciła: ${err.message || err}`;
+    }
+  };
 }
 
 async function ingestFiles(el, deps, company, files) {
@@ -349,7 +431,7 @@ async function ingestFiles(el, deps, company, files) {
         return old ? { ...t, invoiceId: old.invoiceId, matchedBy: old.matchedBy, category: old.category, auto: old.auto } : t;
       });
       await store.saveBankMonth(company.id, month,
-        [...kept, ...matchTransactions(merged, invoices)]
+        [...kept, ...matchTransactions(merged, invoices, { accounts: store.clientAccounts(company.id) })]
           .sort((a, b) => a.account.localeCompare(b.account)
             || (a.seq ?? 0) - (b.seq ?? 0)
             || a.date.localeCompare(b.date)));
@@ -453,6 +535,7 @@ function openTxDetail(el, deps, company, tx) {
         ${inv && /do weryfikacji/.test(tx.matchedBy || '') ? '<button class="adk-btn primary" id="txVerify">✓ Zweryfikuj przypisanie</button>' : ''}
         ${inv ? `<button class="adk-btn" id="txUnassign">Odepnij fakturę</button>`
           : `<button class="adk-btn primary" id="txAssign">Przypisz fakturę</button>`}
+        ${!inv && tx.amount < 0 && fakturowniaMode(company) === 'dual' ? '<button class="adk-btn" id="txMakeDw">Utwórz DW w Fakturowni…</button>' : ''}
         <span style="flex:1"></span>
         <button class="adk-btn" id="txClose">Zamknij (Esc)</button>
       </div>
@@ -464,6 +547,11 @@ function openTxDetail(el, deps, company, tx) {
   overlay.querySelector('#txAssign')?.addEventListener('click', () => {
     close();
     openAssignModal(el, deps, company, tx);
+  });
+  overlay.querySelector('#txMakeDw')?.addEventListener('click', () => {
+    close();
+    const clientName = buildAccountIndex(store.clientAccounts(company.id)).get(counterAccount(tx.desc))?.name || '';
+    openDwModal(el, deps, company, tx, tx.category || 'wynagrodzenie', clientName);
   });
   // Confirming turns the tentative auto-match into a manual-grade one, so
   // "Dopasuj ponownie" will never move it again

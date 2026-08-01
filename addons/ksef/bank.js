@@ -186,6 +186,34 @@ export function parseStatement(text) {
   return p.parse(text);
 }
 
+// ---- counterparty account extraction (shared with the UI column) ----
+
+export function normAcct(s) {
+  let t = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (/^PL\d{26}$/.test(t)) t = t.slice(2);
+  return t;
+}
+
+const NRB_RE = /\b\d{2}(?: ?\d{4}){6}\b/;
+// Foreign IBANs appear as one unbroken token in iPKO descriptions
+const IBAN_RE = /(?:^|[^A-Z0-9])((?:GB|DE|IE|NL|FR|ES|IT|CZ|SK|LT|LV|EE|BE|AT|CH|SE|NO|DK|FI|LU|PT|HR|SI|HU|RO|BG|GR|MT|CY)\d{2}[A-Z0-9]{10,30})(?![A-Z0-9])/;
+
+export function counterAccount(desc) {
+  const d = String(desc || '');
+  const nrb = NRB_RE.exec(d);
+  if (nrb) return normAcct(nrb[0]);
+  const iban = IBAN_RE.exec(d);
+  return iban ? normAcct(iban[1]) : '';
+}
+
+export function buildAccountIndex(accounts) {
+  const map = new Map();
+  for (const e of accounts || []) {
+    for (const a of e.accounts || []) map.set(normAcct(a), e);
+  }
+  return map;
+}
+
 // ---- matcher ----
 
 function ascii(s) {
@@ -218,7 +246,8 @@ export function categorize(tx) {
 // amount + counterparty name. Purely numeric invoice numbers only count on
 // word boundaries AND with the amount agreeing — short digit runs appear in
 // every card ref number.
-export function matchTransactions(txs, invoices) {
+export function matchTransactions(txs, invoices, opts = {}) {
+  const accountIndex = opts.accounts ? buildAccountIndex(opts.accounts) : null;
   const byNumber = new Map();
   for (const inv of invoices) {
     const key = normToken(inv.number);
@@ -268,6 +297,22 @@ export function matchTransactions(txs, invoices) {
     const txTime = Date.parse(tx.date);
     const dateDist = (inv) => (inv.issueDate ? Math.abs(Date.parse(inv.issueDate) - txTime) : Number.MAX_SAFE_INTEGER);
     const byCloseness = [...invoices].sort((a, b) => dateDist(a) - dateDist(b));
+
+    // The client-accounts register identifies the counterparty from the
+    // transfer's account number — the strongest signal for documents whose
+    // titles carry no invoice number (salary DWs above all)
+    if (accountIndex) {
+      const entry = accountIndex.get(counterAccount(tx.desc));
+      if (entry) {
+        const nameA = ascii(entry.name);
+        const hit = byCloseness.find((inv) => inv.dir === wantDir && amountOk(inv) && !used.has(inv.id)
+          && ascii(wantDir === 'cost' ? inv.sellerName : inv.buyerName) === nameA);
+        if (hit) {
+          used.add(hit.id);
+          return { ...tx, invoiceId: hit.id, matchedBy: 'konto klienta + kwota', auto: true };
+        }
+      }
+    }
     for (const inv of byCloseness) {
       if (inv.dir !== wantDir || !amountOk(inv) || used.has(inv.id)) continue;
       const other = ascii(wantDir === 'cost' ? inv.sellerName : inv.buyerName);

@@ -126,6 +126,36 @@ export async function createCostInFakturownia({ http }, company, data) {
   return created;
 }
 
+// Internal evidence document (dowód wewnętrzny) — how salaries, ZUS and
+// tax payments show up as expenses in Fakturownia reports. Numbered by the
+// account's own DW pattern.
+export async function createDwInFakturownia({ http }, company, data) {
+  const departments = await fvRequest(http, company, '/departments.json');
+  const department = departments?.[0];
+  if (!department?.id) throw new Error('Fakturownia returned no department for the account');
+  const created = await fvRequest(http, company, '/invoices.json', {
+    method: 'POST',
+    body: {
+      invoice: {
+        income: 0,
+        kind: 'dw',
+        number: null,
+        issue_date: data.issueDate,
+        sell_date: data.issueDate,
+        currency: data.currency || 'PLN',
+        department_id: department.id,
+        buyer_name: data.counterparty,
+        buyer_company: false,
+        status: 'paid',
+        paid_date: data.paidDate || data.issueDate,
+        positions: [{ name: data.positionName, quantity: 1, total_price_gross: data.gross, tax: 'disabled' }],
+      },
+    },
+  });
+  if (!created?.id) throw new Error(`Fakturownia did not return the created DW: ${JSON.stringify(created).slice(0, 200)}`);
+  return created;
+}
+
 export async function fvSendToKsef({ http }, company, fvId) {
   return fvRequest(http, company, `/invoices/${fvId}.json?send_to_ksef=yes`);
 }
