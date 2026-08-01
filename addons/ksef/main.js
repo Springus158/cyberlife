@@ -266,7 +266,7 @@ export default async function activate(cl) {
         net: Number(c.net) || 0,
         vat: Number(c.vat) || 0,
         gross: Number(c.gross) || rec.gross || 0,
-        currency: c.currency || 'PLN',
+        currency: c.currency || rec.currency || 'PLN',
         paid: !!c.paid,
       };
       await store.upsertInvoices(company.id, [record]);

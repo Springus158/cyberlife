@@ -180,7 +180,7 @@ async function uploadFiles(el, deps, company, fileList) {
       const key = `files/manual/${sha.slice(0, 12)}-${safeName.replace(/\.(png|jpe?g)$/i, '')}.pdf`.replace(/\.pdf\.pdf$/i, '.pdf');
       await deps.cl.putDataFile(key, bufToBase64(buf), { toPdf: true });
 
-      let fields = { nips: [], dates: [], amounts: { strong: [], all: [] }, numbers: [] };
+      let fields = { nips: [], dates: [], amounts: { strong: [], all: [] }, numbers: [], currency: '' };
       const isPdf = /\.pdf$/i.test(file.name);
       if (isPdf) {
         try {
@@ -204,6 +204,7 @@ async function uploadFiles(el, deps, company, fileList) {
         number: fields.numbers[0] || '',
         docDate: fields.dates[0] || '',
         gross: fields.amounts.strong[0] || 0,
+        currency: fields.currency || '',
       };
       await store.upsertFiles(company.id, [rec]);
       added++;
@@ -238,7 +239,7 @@ function openFileDetail(el, deps, company, rec) {
           <div><b>Data dokumentu:</b> ${esc(rec.docDate || '—')} <span class="ksefad-muted">(miesiąc ${esc(rec.month || '—')})</span></div>
           <div><b>Numer (odczytany):</b> ${esc(rec.number || '—')}</div>
           <div><b>NIP (odczytany):</b> ${esc(rec.nip || '—')}</div>
-          <div><b>Kwota (odczytana):</b> ${rec.gross ? zl(rec.gross) : '—'}</div>
+          <div><b>Kwota (odczytana):</b> ${rec.gross ? zl(rec.gross, rec.currency || 'PLN') : '—'}</div>
           <div><b>Źródło:</b> ${esc(rec.source || '—')}</div>
           ${rec.matchedBy ? `<div><b>Dopasowano po:</b> ${esc(rec.matchedBy)}</div>` : ''}
         </div>
@@ -289,7 +290,7 @@ function openFileDetail(el, deps, company, rec) {
         net: 0,
         vat: 0,
         gross: rec.gross || 0,
-        currency: 'PLN',
+        currency: rec.currency || 'PLN',
         paid: false,
       };
       await store.upsertInvoices(company.id, [record]);

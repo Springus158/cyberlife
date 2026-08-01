@@ -96,6 +96,21 @@ export function extractInvoiceNumbers(text) {
   return out;
 }
 
+// The document currency is whichever symbol/code appears most often next
+// to money amounts; bare counts over the whole text would drown in VAT-law
+// boilerplate mentioning PLN
+export function extractCurrency(text) {
+  const votes = { PLN: 0, EUR: 0, USD: 0, GBP: 0, CHF: 0 };
+  const AMOUNT = String.raw`\d(?:[\d\s.,]*\d)?[.,]\d{2}`;
+  for (const m of text.matchAll(new RegExp(String.raw`(EUR|USD|GBP|CHF|PLN|€|\$|£|zł)\s*${AMOUNT}|${AMOUNT}\s*(EUR|USD|GBP|CHF|PLN|€|\$|£|zł)`, 'gi'))) {
+    const tok = (m[1] || m[2] || '').toUpperCase();
+    const cur = { '€': 'EUR', $: 'USD', '£': 'GBP', 'ZŁ': 'PLN' }[tok] || tok;
+    if (cur in votes) votes[cur]++;
+  }
+  const best = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
+  return best[1] > 0 ? best[0] : '';
+}
+
 export function extractFields(text, ownNip) {
   const amounts = extractAmounts(text);
   return {
@@ -103,6 +118,7 @@ export function extractFields(text, ownNip) {
     dates: extractDates(text),
     amounts,
     numbers: extractInvoiceNumbers(text),
+    currency: extractCurrency(text),
   };
 }
 
