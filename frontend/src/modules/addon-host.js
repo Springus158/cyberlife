@@ -299,6 +299,20 @@ function makeContext(addon, inst) {
       }
     },
 
+    // Concatenate stored PDFs into a new blob-store file (poppler
+    // pdfunite); open: true also opens the result in the system viewer
+    async mergePdfs(keys, outPath, { open = false } = {}) {
+      const res = await fetch(`${API_BASE}/api/addons/pdfmerge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addon: addon.id, keys, outPath, open }),
+      });
+      if (!res.ok) {
+        throw new Error(`pdfmerge: ${res.status} ${await res.text()}`);
+      }
+      return res.json();
+    },
+
     dataFileUrl(path) {
       return `${API_BASE}/addons-data/${addon.id}/${String(path).split('/').map(encodeURIComponent).join('/')}`;
     },

@@ -138,6 +138,9 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
      modules, optionally straight to one of its pages
    - `cl.pdfText(dataBase64)` — layout-preserving text of a PDF via the
      app's pdftotext bridge (needs poppler installed; ≤15MB)
+   - `cl.mergePdfs(keys, outPath, {open})` — concatenate stored PDFs
+     (poppler pdfunite) into a new blob-store file; `open: true` also
+     opens the result in the system viewer
    - `cl.putDataFile(path, dataBase64, {toPdf})` / `cl.dataFileUrl(path)`
      / `cl.deleteDataFile(path)` — per-addon blob store for binary
      artifacts too big for `cl.storage` (≤30MB per file), kept under

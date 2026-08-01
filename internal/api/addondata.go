@@ -19,6 +19,7 @@ import (
 	"github.com/kalor62/cyberlife/internal/addons"
 	"github.com/kalor62/cyberlife/internal/logging"
 	"github.com/kalor62/cyberlife/internal/paths"
+	"github.com/kalor62/cyberlife/internal/platform"
 )
 
 const maxDataFileBytes = 30 << 20
@@ -152,6 +153,89 @@ func imageToPdf(ctx context.Context, data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%v: %s", err, strings.TrimSpace(string(outBytes)))
 	}
 	return os.ReadFile(out)
+}
+
+type addonPdfMergeRequest struct {
+	Addon   string   `json:"addon"`
+	Keys    []string `json:"keys"`
+	OutPath string   `json:"outPath"`
+	Open    bool     `json:"open,omitempty"`
+}
+
+// handleAddonPdfMerge concatenates stored PDFs (poppler's pdfunite) into a
+// new blob-store file — the "all non-KSeF invoices of the month in one PDF
+// for the accountant" path — and optionally opens the result.
+func (s *Server) handleAddonPdfMerge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("POST only"))
+		return
+	}
+	var req addonPdfMergeRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	addon, ok := addons.Get(req.Addon, s.manager.GetAddonsEnabled())
+	if !ok || !addon.Enabled {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("addon %q is not enabled", req.Addon))
+		return
+	}
+	if len(req.Keys) == 0 || len(req.Keys) > 300 {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("keys must hold 1-300 stored PDF paths"))
+		return
+	}
+	outRel, ok := cleanRelPath(req.OutPath)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid outPath %q", req.OutPath))
+		return
+	}
+	bin, err := exec.LookPath("pdfunite")
+	if err != nil {
+		writeErr(w, http.StatusNotImplemented, fmt.Errorf("pdfunite not installed — install poppler (brew install poppler / apt install poppler-utils)"))
+		return
+	}
+	root, err := paths.AddonData()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	args := make([]string, 0, len(req.Keys)+1)
+	for _, key := range req.Keys {
+		rel, ok := cleanRelPath(key)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid key %q", key))
+			return
+		}
+		full := filepath.Join(root, addon.ID, filepath.FromSlash(rel))
+		if _, err := os.Stat(full); err != nil {
+			writeErr(w, http.StatusNotFound, fmt.Errorf("stored file %q not found", key))
+			return
+		}
+		args = append(args, full)
+	}
+	outFull := filepath.Join(root, addon.ID, filepath.FromSlash(outRel))
+	if err := os.MkdirAll(filepath.Dir(outFull), 0o755); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, bin, append(args, outFull)...).CombinedOutput(); err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, fmt.Errorf("pdfunite failed: %v: %s", err, strings.TrimSpace(string(out))))
+		return
+	}
+	if req.Open {
+		if err := platform.OpenExternal(outFull); err != nil {
+			logging.Warn("pdfmerge open failed", "error", err)
+		}
+	}
+	info, _ := os.Stat(outFull)
+	logging.Info("addon pdf merge", "addon", addon.ID, "inputs", len(req.Keys), "out", outRel)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":   true,
+		"path": outRel,
+		"url":  "/addons-data/" + addon.ID + "/" + outRel,
+		"size": info.Size(),
+	})
 }
 
 // handleAddonDataAsset serves stored blobs back to the webview (PDF

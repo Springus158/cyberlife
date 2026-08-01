@@ -260,10 +260,13 @@ export function renderBankPage(el, deps) {
     bankView.info = `Oznaczono ${n} faktur kosztowych jako zapłacone.`;
     rerender();
   });
-  el.querySelector('#bankReport')?.addEventListener('click', () => printReport(deps, company,
-    bankView.mode === 'month' ? monthLabel(bankView.month)
-      : bankView.mode === 'all' ? 'cała historia'
-        : `${bankView.from} — ${bankView.to}`, txs));
+  el.querySelector('#bankReport')?.addEventListener('click', async () => {
+    await printReport(deps, company,
+      bankView.mode === 'month' ? monthLabel(bankView.month)
+        : bankView.mode === 'all' ? 'cała historia'
+          : `${bankView.from} — ${bankView.to}`, txs);
+    rerender();
+  });
   el.querySelectorAll('[data-tx]').forEach((row) => {
     row.onclick = (e) => {
       if (e.target.closest('button, select')) return;
@@ -657,7 +660,20 @@ const REPORT_TEMPLATES = {
   'PKO BP (iPKO Biznes)': ipkoReportSection,
 };
 
-function printReport(deps, company, month, txs) {
+// Invoices the accountant cannot pull from KSeF herself — everything of
+// the period without a KSeF number (foreign invoices above all); DW and
+// proformas are not invoices and stay out
+function nonKsefInvoices(store, company, txs) {
+  const dates = txs.map((t) => t.date).sort();
+  const from = dates[0];
+  const to = dates[dates.length - 1];
+  if (!from) return [];
+  return store.listInvoices({ companyId: company.id, from, to })
+    .filter((i) => !i.ksefNumber && i.kind !== 'dw' && i.kind !== 'proforma')
+    .sort((a, b) => a.issueDate.localeCompare(b.issueDate));
+}
+
+async function printReport(deps, company, month, txs) {
   const { store } = deps;
   const byAccount = new Map();
   for (const tx of txs) {
@@ -670,6 +686,51 @@ function printReport(deps, company, month, txs) {
     warn: txs.filter((t) => !t.invoiceId && (t.category || categorize(t))).length,
   };
   counts.bad = txs.length - counts.ok - counts.warn;
+
+  // Second deliverable: the non-KSeF invoices of the period merged into
+  // one PDF from the file archive
+  const extraInvoices = nonKsefInvoices(store, company, txs);
+  const fileMap = store.fileByInvoice(company.id);
+  const withPdf = extraInvoices.filter((i) => fileMap.has(i.id));
+  const withoutPdf = extraInvoices.filter((i) => !fileMap.has(i.id));
+  let mergedNote = '';
+  if (withPdf.length) {
+    const outName = `reports/faktury-poza-ksef-${month.replace(/[^\dA-Za-z-]+/g, '_')}.pdf`;
+    try {
+      await deps.cl.mergePdfs(withPdf.map((i) => fileMap.get(i.id).key), outName, { open: true });
+      mergedNote = `Załącznik: <b>${withPdf.length}</b> faktur spoza KSeF w osobnym pliku PDF (${esc(outName.split('/').pop())}).`;
+      bankView.info = `✓ Raport (przeglądarka) + ${withPdf.length} faktur spoza KSeF w jednym PDF (otwarty).`;
+    } catch (err) {
+      deps.cl.log('invoice merge failed:', err);
+      mergedNote = `<span style="color:#c0392b">Nie udało się skleić załącznika PDF: ${esc(err.message || err)}</span>`;
+      bankView.error = `Załącznik PDF nie powstał: ${err.message || err}`;
+    }
+  }
+  const extraSection = extraInvoices.length ? `
+      <h3 style="margin:22px 0 4px">Faktury spoza KSeF w tym okresie (${extraInvoices.length})</h3>
+      <div style="color:#555; margin-bottom:6px">Tych dokumentów nie ma w KSeF — ich obrazy ${withPdf.length ? 'są w załączonym pliku PDF, w kolejności jak niżej' : 'wymagają osobnego przekazania'}. ${mergedNote}</div>
+      <table style="border-collapse:collapse; width:100%; font-size:11px">
+        <thead><tr>
+          <th style="border:1px solid #bbb; padding:3px 6px; text-align:left">Lp</th>
+          <th style="border:1px solid #bbb; padding:3px 6px; text-align:left">Numer</th>
+          <th style="border:1px solid #bbb; padding:3px 6px; text-align:left">Data</th>
+          <th style="border:1px solid #bbb; padding:3px 6px; text-align:left">Kontrahent</th>
+          <th style="border:1px solid #bbb; padding:3px 6px; text-align:right">Brutto</th>
+          <th style="border:1px solid #bbb; padding:3px 6px; text-align:left">PDF</th>
+        </tr></thead>
+        <tbody>
+          ${extraInvoices.map((i, n) => `
+            <tr${fileMap.has(i.id) ? '' : ' style="background:#f8dcdc"'}>
+              <td style="border:1px solid #bbb; padding:3px 6px">${n + 1}</td>
+              <td style="border:1px solid #bbb; padding:3px 6px">${esc(i.number || '—')}</td>
+              <td style="border:1px solid #bbb; padding:3px 6px">${esc(i.issueDate)}</td>
+              <td style="border:1px solid #bbb; padding:3px 6px">${esc(i.dir === 'cost' ? i.sellerName : i.buyerName)}</td>
+              <td style="border:1px solid #bbb; padding:3px 6px; text-align:right">${plMoney(i.gross)} ${esc(i.currency)}</td>
+              <td style="border:1px solid #bbb; padding:3px 6px">${fileMap.has(i.id) ? 'w załączniku' : 'BRAK PLIKU'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      ${withoutPdf.length ? `<div style="color:#c0392b; margin-top:4px">Uwaga: ${withoutPdf.length} pozycji bez pliku PDF w archiwum.</div>` : ''}` : '';
   const legend = (color, label) =>
     `<span style="display:inline-block; padding:1px 10px; background:${color}; border:1px solid #bbb; margin-right:8px">${label}</span>`;
   const body = `
@@ -686,6 +747,7 @@ function printReport(deps, company, month, txs) {
         const template = REPORT_TEMPLATES[list[0]?.bank] || ipkoReportSection;
         return template(store, company, account, currency, list);
       }).join('')}
+      ${extraSection}
     </div>`;
   const title = `Rozliczenie wyciągów ${month} — ${company.name}`;
   deps.cl.openPreview(printDocHtml(title, body), title).catch((err) => {
