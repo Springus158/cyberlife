@@ -21,6 +21,7 @@ const filesView = {
   to: '',
   query: '',
   show: { linked: true, unlinked: true },
+  types: { invoices: true, statements: true },
   selected: 0,
   busy: '',
   error: '',
@@ -45,9 +46,25 @@ function filesForView(store, company) {
     return true;
   });
   list = list.filter((f) => (f.invoiceId ? filesView.show.linked : filesView.show.unlinked));
+  if (!filesView.types.invoices) list = [];
+
+  // Original bank statements live in their own registry but browse here
+  // alongside invoice files (one archive, one page)
+  if (filesView.types.statements) {
+    const stmts = store.stmtFiles(company.id)
+      .filter((s) => {
+        const m = s.months?.[0] || '';
+        if (!m) return true;
+        if (fromM && (s.months[s.months.length - 1] || m) < fromM) return false;
+        if (toM && m > toM) return false;
+        return true;
+      })
+      .map((s) => ({ stmt: true, id: s.sha256.slice(0, 16), key: s.key, name: s.name, month: s.months?.[0] || '', account: s.account, period: s.period, currency: s.currency }));
+    list = [...list, ...stmts].sort((a, b) => String(b.docDate || b.month || '').localeCompare(String(a.docDate || a.month || '')));
+  }
   if (filesView.query) {
     const q = filesView.query.toLowerCase();
-    list = list.filter((f) => [f.name, f.number, f.nip, f.note].some((v) => String(v || '').toLowerCase().includes(q)));
+    list = list.filter((f) => [f.name, f.number, f.nip, f.note, f.account, f.period].some((v) => String(v || '').toLowerCase().includes(q)));
   }
   return list;
 }
@@ -93,7 +110,10 @@ export function renderFilesPage(el, deps) {
       ${filesView.error ? `<div class="ksefad-error">${esc(filesView.error)}</div>` : ''}
       ${filesView.info ? `<div class="ksefad-muted">${esc(filesView.info)}</div>` : ''}
       <div class="ksefad-bar ksefad-muted" style="gap:16px">
-        <span>${all.length} plików w archiwum, przypisanych ${linked}:</span>
+        <span>${all.length} faktur (przypisanych ${linked}), ${store.stmtFiles(company.id).length} wyciągów:</span>
+        <label><input type="checkbox" data-ftype="invoices" ${filesView.types.invoices ? 'checked' : ''}> Faktury</label>
+        <label><input type="checkbox" data-ftype="statements" ${filesView.types.statements ? 'checked' : ''}> Wyciągi</label>
+        <span style="opacity:.4">|</span>
         <label style="color:var(--success, #a6e3a1)"><input type="checkbox" data-fshow="linked" ${filesView.show.linked ? 'checked' : ''}> przypisane</label>
         <label style="color:var(--error, #f38ba8)"><input type="checkbox" data-fshow="unlinked" ${filesView.show.unlinked ? 'checked' : ''}> nieprzypisane</label>
       </div>
@@ -102,6 +122,17 @@ export function renderFilesPage(el, deps) {
           <thead><tr><th>Data</th><th>Plik</th><th>Numer</th><th>Kwota</th><th>Faktura w systemie</th><th>PDF</th></tr></thead>
           <tbody>
             ${list.map((f, i) => {
+              if (f.stmt) {
+                return `
+              <tr data-stmt="${esc(f.key)}" class="${i === filesView.selected ? 'sel' : ''}">
+                <td>${esc(f.month || '—')}</td>
+                <td style="max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${esc(f.name)}">🏦 ${esc(f.name)}</td>
+                <td class="ksefad-muted">…${esc((f.account || '').slice(-4))} ${esc(f.currency || '')}</td>
+                <td style="text-align:right" class="ksefad-muted">—</td>
+                <td class="ksefad-muted">wyciąg bankowy · ${esc(f.period || '')}</td>
+                <td style="text-align:center"><button class="ksefad-btn" data-preview-stmt="${esc(f.key)}">📄</button></td>
+              </tr>`;
+              }
               const inv = f.invoiceId ? invIndex.get(f.invoiceId) : null;
               return `
               <tr data-fid="${esc(f.id)}" class="${i === filesView.selected ? 'sel' : ''} ${f.invoiceId ? 'ksefad-row-ok' : 'ksefad-row-bad'}">
@@ -139,6 +170,19 @@ export function renderFilesPage(el, deps) {
       renderFilesPage(el, deps);
     };
   });
+  el.querySelectorAll('[data-ftype]').forEach((box) => {
+    box.onchange = () => {
+      filesView.types[box.dataset.ftype] = box.checked;
+      renderFilesPage(el, deps);
+    };
+  });
+  el.querySelectorAll('[data-preview-stmt]').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const s = store.stmtFiles(company.id).find((x) => x.key === btn.dataset.previewStmt);
+      if (s) openPdfOverlay(deps, { key: s.key, name: s.name, month: s.months?.[0] || '' });
+    };
+  });
   el.querySelector('#filesUpload').onclick = () => el.querySelector('#filesInput').click();
   el.querySelector('#filesInput').onchange = (e) => uploadFiles(el, deps, company, e.target.files);
   el.querySelectorAll('[data-preview]').forEach((btn) => {
@@ -151,6 +195,11 @@ export function renderFilesPage(el, deps) {
   el.querySelectorAll('tbody tr').forEach((tr, i) => {
     tr.onclick = () => {
       filesView.selected = i;
+      if (tr.dataset.stmt) {
+        const s = store.stmtFiles(company.id).find((x) => x.key === tr.dataset.stmt);
+        if (s) openPdfOverlay(deps, { key: s.key, name: s.name, month: s.months?.[0] || '' });
+        return;
+      }
       const rec = store.files(company.id).find((f) => f.id === tr.dataset.fid);
       if (rec) openFileDetail(el, deps, company, rec);
     };
