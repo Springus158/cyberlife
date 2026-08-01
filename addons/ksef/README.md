@@ -33,11 +33,26 @@ rules, this addon is not for you.
   entity that should talk to KSeF directly (no Fakturownia account
   needed).
 - **Multi-company** — each company has its own NIP, KSeF token and optional
-  Fakturownia account.
+  Fakturownia account; exactly one company is active at a time (picker in
+  the page bar scopes every page).
+- **Bank statements (Wyciągi)** — upload iPKO Biznes statement PDFs (or the
+  iPKO "HISTORIA BIEŻĄCA" export), automatic transaction↔invoice matching,
+  row coloring by state, and a per-bank statement-mirror report for the
+  accountant.
+- **Invoice file archive (Pliki)** — original PDFs/scans of documents kept
+  in the per-addon blob store (`~/.cyberlife/addon-data/ksef/files/…`,
+  future R2 mirror), sha256-deduplicated. Files pair with invoice records
+  automatically (NIP checksum + amounts + dates + number heuristics; OCR
+  handled at import time); unmatched ones are browsable and can be paired
+  by hand or turned into a new cost record. Every invoice table shows a
+  PDF column with an inline preview; images (PNG/JPG) convert to PDF on
+  upload.
 - **Agent tools** — `ksef_list_invoices`, `ksef_create_invoice`,
   `ksef_send_invoice`, `ksef_mark_paid`, `ksef_sync`,
-  `ksef_import_fakturownia`, `ksef_list_companies` are exposed over the
-  app's MCP endpoint, so agents can issue and manage invoices.
+  `ksef_import_fakturownia`, `ksef_list_companies`,
+  `ksef_list_unmatched_files`, `ksef_attach_file` are exposed over the
+  app's MCP endpoint, so agents can issue and manage invoices and pair
+  archived documents.
 
 ## Setup
 
