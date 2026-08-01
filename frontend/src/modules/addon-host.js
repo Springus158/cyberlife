@@ -273,6 +273,36 @@ function makeContext(addon, inst) {
       }
     },
 
+    // Per-addon blob store (binary artifacts too big for cl.storage).
+    // putDataFile writes (toPdf converts PNG/JPEG to PDF on the host),
+    // dataFileUrl is what an <embed>/<a> can load, deleteDataFile removes.
+    async putDataFile(path, dataBase64, { toPdf = false } = {}) {
+      const res = await fetch(`${API_BASE}/api/addons/datafile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addon: addon.id, path, dataBase64, toPdf }),
+      });
+      if (!res.ok) {
+        throw new Error(`datafile ${path}: ${res.status} ${await res.text()}`);
+      }
+      return res.json();
+    },
+
+    async deleteDataFile(path) {
+      const res = await fetch(`${API_BASE}/api/addons/datafile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addon: addon.id, path, delete: true }),
+      });
+      if (!res.ok) {
+        throw new Error(`datafile delete ${path}: ${res.status} ${await res.text()}`);
+      }
+    },
+
+    dataFileUrl(path) {
+      return `${API_BASE}/addons-data/${addon.id}/${String(path).split('/').map(encodeURIComponent).join('/')}`;
+    },
+
     registerAgentTool(name, handler) {
       if (typeof handler !== 'function') {
         throw new Error('registerAgentTool needs (name, async handler(args))');

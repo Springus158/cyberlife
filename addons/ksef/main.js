@@ -9,6 +9,7 @@ import {
   activeCompany, setActiveCompany,
 } from './page.js';
 import { renderBankPage, bankOnKey } from './bank-page.js';
+import { renderFilesPage, filesOnKey } from './files-page.js';
 import { syncCompany, createInvoice, sendToKsef, setPaid } from './service.js';
 import { importFromFakturownia } from './fakturownia.js';
 
@@ -20,6 +21,7 @@ export default async function activate(cl) {
   let pageEl = null;
   let clientsEl = null;
   let bankEl = null;
+  let filesEl = null;
   let companyBarEl = null;
 
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -28,6 +30,7 @@ export default async function activate(cl) {
     if (pageEl) renderPage(pageEl, deps);
     if (clientsEl) renderClientsPage(clientsEl, deps);
     if (bankEl) renderBankPage(bankEl, deps);
+    if (filesEl) renderFilesPage(filesEl, deps);
   };
 
   // The company picker is anchored in the module page bar and scopes every
@@ -100,6 +103,19 @@ export default async function activate(cl) {
         },
         onKey(e) {
           return bankEl ? bankOnKey(e, bankEl, deps) : false;
+        },
+        onShow: () => updateCompanyBar(),
+      },
+      {
+        id: 'files',
+        label: 'Pliki',
+        icon: '📄',
+        render(el) {
+          filesEl = el;
+          renderFilesPage(el, deps);
+        },
+        onKey(e) {
+          return filesEl ? filesOnKey(e, filesEl, deps) : false;
         },
         onShow: () => updateCompanyBar(),
       },
@@ -208,6 +224,61 @@ export default async function activate(cl) {
     return results;
   });
 
+  cl.registerAgentTool('list_unmatched_files', async (args) => {
+    const company = resolveCompany(args.company);
+    const files = store.files(company.id).filter((f) => !f.invoiceId);
+    return {
+      count: files.length,
+      files: files.slice(0, args.limit || 100).map((f) => ({
+        id: f.id, name: f.name, key: f.key, month: f.month, docDate: f.docDate,
+        nip: f.nip, number: f.number, gross: f.gross, source: f.source,
+      })),
+    };
+  });
+
+  cl.registerAgentTool('attach_file', async (args) => {
+    const company = resolveCompany(args.company);
+    const rec = store.files(company.id).find((f) => f.id === args.fileId);
+    if (!rec) throw new Error(`file ${args.fileId} not found`);
+    if (args.invoiceId) {
+      const inv = store.getInvoice(args.invoiceId);
+      if (!inv) throw new Error(`invoice ${args.invoiceId} not found`);
+      const updated = await store.updateFileRec(company.id, rec.id, {
+        invoiceId: inv.id,
+        matchedBy: args.matchedBy || 'agent',
+      });
+      return { file: updated };
+    }
+    if (args.createInvoice) {
+      const c = args.createInvoice;
+      if (c.issueDate) assertDate(c.issueDate, 'issueDate');
+      const record = {
+        id: `file:${rec.id}`,
+        src: 'file',
+        dir: c.dir === 'sale' ? 'sale' : 'cost',
+        kind: 'vat',
+        number: c.number || rec.number || '',
+        issueDate: c.issueDate || rec.docDate || `${rec.month}-01`,
+        sellerNip: c.sellerNip || rec.nip || '',
+        sellerName: c.sellerName || rec.name,
+        buyerNip: company.nip,
+        buyerName: company.name,
+        net: Number(c.net) || 0,
+        vat: Number(c.vat) || 0,
+        gross: Number(c.gross) || rec.gross || 0,
+        currency: c.currency || 'PLN',
+        paid: !!c.paid,
+      };
+      await store.upsertInvoices(company.id, [record]);
+      const updated = await store.updateFileRec(company.id, rec.id, {
+        invoiceId: record.id,
+        matchedBy: args.matchedBy || 'agent (nowa)',
+      });
+      return { file: updated, invoice: record };
+    }
+    throw new Error('pass invoiceId or createInvoice');
+  });
+
   cl.registerAgentTool('import_fakturownia', async (args) => {
     const company = resolveCompany(args.company);
     const result = await importFromFakturownia(deps, company);
@@ -223,6 +294,7 @@ export default async function activate(cl) {
     pageEl = null;
     clientsEl = null;
     bankEl = null;
+    filesEl = null;
     companyBarEl = null;
   };
 }

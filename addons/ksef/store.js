@@ -62,6 +62,7 @@ export function createStore(cl) {
   async function deleteCompany(id) {
     for (const key of Object.keys(cache)) {
       if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`) || key.startsWith(`bank:${id}:`)
+        || key.startsWith(`files:${id}`)
         || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}`) {
         await drop(key);
       }
@@ -336,6 +337,61 @@ export function createStore(cl) {
       .reverse();
   }
 
+  // ---- invoice files (registry only; the bytes live in the addon blob
+  // store under files/<year>/<name>.pdf and later mirror to R2) ----
+  // Record: {id, sha256, key, name, month 'YYYY-MM', source: gdrive|manual,
+  // invoiceId, nip, number, docDate, gross, note}
+
+  function files(companyId) {
+    return partsOf(`files:${companyId}`).flatMap((k) => cache[k] || []);
+  }
+
+  async function saveFiles(companyId, list) {
+    const sorted = [...list].sort((a, b) =>
+      String(b.docDate || b.month || '').localeCompare(String(a.docDate || a.month || '')));
+    await writeParts(`files:${companyId}`, sorted);
+  }
+
+  async function upsertFiles(companyId, incoming) {
+    const list = files(companyId).slice();
+    let added = 0;
+    let updated = 0;
+    for (const rec of incoming) {
+      const i = list.findIndex((x) => x.sha256 === rec.sha256);
+      if (i < 0) {
+        list.push(rec);
+        added++;
+        continue;
+      }
+      const merged = { ...list[i], ...rec, invoiceId: rec.invoiceId || list[i].invoiceId };
+      if (JSON.stringify(merged) !== JSON.stringify(list[i])) updated++;
+      list[i] = merged;
+    }
+    await saveFiles(companyId, list);
+    return { added, updated };
+  }
+
+  async function updateFileRec(companyId, id, patch) {
+    const list = files(companyId).slice();
+    const i = list.findIndex((x) => x.id === id);
+    if (i < 0) throw new Error(`file ${id} not found`);
+    list[i] = { ...list[i], ...patch };
+    await saveFiles(companyId, list);
+    return list[i];
+  }
+
+  async function deleteFileRec(companyId, id) {
+    await saveFiles(companyId, files(companyId).filter((x) => x.id !== id));
+  }
+
+  function fileByInvoice(companyId) {
+    const map = new Map();
+    for (const f of files(companyId)) {
+      if (f.invoiceId && !map.has(f.invoiceId)) map.set(f.invoiceId, f);
+    }
+    return map;
+  }
+
   // ---- Fakturownia account snapshot (read-only display) ----
 
   function fvInfo(companyId) {
@@ -368,5 +424,10 @@ export function createStore(cl) {
     bankMonth,
     saveBankMonth,
     bankMonths,
+    files,
+    upsertFiles,
+    updateFileRec,
+    deleteFileRec,
+    fileByInvoice,
   };
 }

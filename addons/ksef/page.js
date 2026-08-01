@@ -339,6 +339,7 @@ export function renderPage(el, deps) {
     limit: 300,
   });
   view.selected = Math.min(view.selected, Math.max(0, invoices.length - 1));
+  const fileMap = store.fileByInvoice(view.companyId);
 
   el.innerHTML = `
     <div class="ksefad">
@@ -353,7 +354,7 @@ export function renderPage(el, deps) {
       ${view.error ? `<div class="ksefad-error">${esc(view.error)}</div>` : ''}
       <div class="ksefad-scroll">
         <table class="ksefad-table">
-          <thead><tr><th>Number</th><th>Date</th><th>Contractor</th><th>Gross</th><th>Status</th><th>KSeF</th></tr></thead>
+          <thead><tr><th>Number</th><th>Date</th><th>Contractor</th><th>Gross</th><th>Status</th><th>KSeF</th><th>PDF</th></tr></thead>
           <tbody>
             ${invoices.map((inv, i) => `
               <tr data-id="${esc(inv.id)}" class="${i === view.selected ? 'sel' : ''}">
@@ -364,6 +365,9 @@ export function renderPage(el, deps) {
                 <td style="text-align:right">${zl(inv.gross, inv.currency)}</td>
                 <td>${payBadge(inv)}</td>
                 <td style="text-align:center">${ksefMark(inv)}</td>
+                <td style="text-align:center">${fileMap.has(inv.id)
+                  ? `<button class="ksefad-btn" data-pdf="${esc(inv.id)}" title="Podgląd PDF">📄</button>`
+                  : '<span class="ksefad-muted">—</span>'}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -390,6 +394,12 @@ export function renderPage(el, deps) {
   el.querySelector('#ksefadNew').onclick = () => openCreateForm(el, deps);
   el.querySelectorAll('tbody tr').forEach((tr, i) => {
     tr.onclick = () => { view.selected = i; openDetail(el, deps, tr.dataset.id); };
+  });
+  el.querySelectorAll('[data-pdf]').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      openPdfOverlay(deps, fileMap.get(btn.dataset.pdf));
+    };
   });
 }
 
@@ -425,8 +435,9 @@ function invoicesForClient(store, client, dir) {
   });
 }
 
-function clientInvoiceTableHtml(list) {
+function clientInvoiceTableHtml(store, list) {
   if (!list.length) return '<p class="ksefad-muted" style="padding:8px 0">Brak dokumentów.</p>';
+  const fileMap = store.fileByInvoice(view.companyId);
   const sums = {};
   for (const i of list) {
     const s = sums[i.currency] || { total: 0, open: 0 };
@@ -436,7 +447,7 @@ function clientInvoiceTableHtml(list) {
   }
   return `
     <table class="ksefad-table">
-      <thead><tr><th>Numer</th><th>Data</th><th>Brutto</th><th>Status</th><th>KSeF</th></tr></thead>
+      <thead><tr><th>Numer</th><th>Data</th><th>Brutto</th><th>Status</th><th>KSeF</th><th>PDF</th></tr></thead>
       <tbody>${list.map((i) => `
         <tr data-inv-id="${esc(i.id)}">
           <td>${esc(i.number || '—')}
@@ -445,6 +456,9 @@ function clientInvoiceTableHtml(list) {
           <td style="text-align:right">${zl(i.gross, i.currency)}</td>
           <td>${payBadge(i)}</td>
           <td style="text-align:center">${ksefMark(i)}</td>
+          <td style="text-align:center">${fileMap.has(i.id)
+            ? `<button class="ksefad-btn" data-pdf="${esc(i.id)}" title="Podgląd PDF">📄</button>`
+            : '<span class="ksefad-muted">—</span>'}</td>
         </tr>`).join('')}
       </tbody>
     </table>
@@ -474,7 +488,7 @@ function clientDetailHtml(store, client) {
       </div>
       ${client.readonly ? '' : '<div class="adk-actions"><button class="adk-btn" id="ksefadClientEdit">Edytuj</button></div>'}`;
   } else {
-    body = clientInvoiceTableHtml(invoicesForClient(store, client, sub === 'fv' ? 'sale' : 'cost'));
+    body = clientInvoiceTableHtml(store, invoicesForClient(store, client, sub === 'fv' ? 'sale' : 'cost'));
   }
   return `
     <div style="display:flex; align-items:baseline; gap:10px">
@@ -552,6 +566,12 @@ export function renderClientsPage(el, deps) {
   });
   el.querySelectorAll('[data-inv-id]').forEach((row) => {
     row.onclick = () => openDetail(el, deps, row.dataset.invId);
+  });
+  el.querySelectorAll('[data-pdf]').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      openPdfOverlay(deps, store.fileByInvoice(view.companyId).get(btn.dataset.pdf));
+    };
   });
   el.querySelector('#ksefadClientsRefresh')?.addEventListener('click', async () => {
     view.busy = 'clients';
@@ -714,6 +734,7 @@ function openDetail(el, deps, id) {
       <div class="ksefad-bar">
         ${inv.kind !== 'proforma' ? `<button class="ksefad-btn" id="ksefadPaid">${inv.paid ? 'Oznacz jako niezapłaconą' : 'Oznacz jako zapłaconą'}</button>` : ''}
         ${inv.src === 'local' ? `<button class="ksefad-btn" id="ksefadPrint">Drukuj / PDF</button>` : ''}
+        ${store.fileByInvoice(inv.companyId).has(inv.id) ? '<button class="ksefad-btn" id="ksefadOrigPdf">📄 Oryginał PDF</button>' : ''}
         ${inv.sendState === 'processing' || (inv.sendState === 'error' && inv.sessionRef)
           ? `<button class="ksefad-btn primary" id="ksefadCheck">Sprawdź status KSeF</button>` : ''}
         ${inv.src === 'local' && !inv.ksefNumber && inv.kind !== 'proforma'
@@ -739,6 +760,9 @@ function openDetail(el, deps, id) {
     refresh(el, deps);
   });
   overlay.querySelector('#ksefadPrint')?.addEventListener('click', () => printInvoice(deps, company, store.getInvoice(id)));
+  overlay.querySelector('#ksefadOrigPdf')?.addEventListener('click', () => {
+    openPdfOverlay(deps, store.fileByInvoice(inv.companyId).get(inv.id));
+  });
   overlay.querySelector('#ksefadCheck')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
     e.target.textContent = 'Sprawdzanie…';
@@ -1016,6 +1040,28 @@ export function printInvoice(deps, company, inv) {
     deps.cl.log('print preview failed:', err);
     alert(`Nie udało się otworzyć podglądu wydruku: ${err.message || err}`);
   });
+}
+
+// ---- PDF preview (blob-store files) ----
+
+export function openPdfOverlay(deps, fileRec) {
+  if (!fileRec?.key) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'ksefad-overlay modal-overlay';
+  overlay.innerHTML = `
+    <div class="ksefad-modal lg" style="width:min(1100px, 96vw); height:92vh; display:flex; flex-direction:column; gap:10px">
+      <div style="display:flex; align-items:baseline; gap:12px">
+        <h2 style="margin:0; font-size:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">📄 ${esc(fileRec.name || fileRec.key)}</h2>
+        <span class="ksefad-muted">${esc(fileRec.docDate || fileRec.month || '')}${fileRec.gross ? ` · ${zl(fileRec.gross)}` : ''}</span>
+        <span style="flex:1"></span>
+        <button class="ksefad-btn" data-close>Zamknij (Esc)</button>
+      </div>
+      <embed src="${esc(deps.cl.dataFileUrl(fileRec.key))}" type="application/pdf" style="flex:1; width:100%; border:1px solid var(--border, #45475a); border-radius:8px; background:#fff">
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('[data-close]').onclick = close;
 }
 
 // ---- keyboard ----

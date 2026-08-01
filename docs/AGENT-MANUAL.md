@@ -138,6 +138,13 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
      modules, optionally straight to one of its pages
    - `cl.pdfText(dataBase64)` — layout-preserving text of a PDF via the
      app's pdftotext bridge (needs poppler installed; ≤15MB)
+   - `cl.putDataFile(path, dataBase64, {toPdf})` / `cl.dataFileUrl(path)`
+     / `cl.deleteDataFile(path)` — per-addon blob store for binary
+     artifacts too big for `cl.storage` (≤30MB per file), kept under
+     `~/.cyberlife/addon-data/<id>/`. `toPdf: true` converts PNG/JPEG
+     to PDF on the host (sips/ImageMagick). `dataFileUrl` returns a URL
+     the webview can load directly (`<embed>` renders PDFs natively) —
+     keep only file KEYS in `cl.storage`, never the bytes
    - `cl.log(…)` — prefixed console logging
 3. `addons_reload` (hot reload), then `addons_list` to check for manifest
    errors. New addons are DISABLED until enabled (`addons_set_enabled`

@@ -27,7 +27,8 @@
       "pages": [
         { "id": "invoices", "label": "Faktury", "icon": "🧾" },
         { "id": "clients", "label": "Klienci", "icon": "👥" },
-        { "id": "bank", "label": "Wyciągi", "icon": "🏦" }
+        { "id": "bank", "label": "Wyciągi", "icon": "🏦" },
+        { "id": "files", "label": "Pliki", "icon": "📄" }
       ]
     }
   ],
@@ -116,6 +117,46 @@
       "schema": {
         "type": "object",
         "properties": { "company": { "type": "string", "description": "Company name, id or NIP; omit for all" } }
+      }
+    },
+    {
+      "name": "list_unmatched_files",
+      "description": "List archived invoice files (PDF scans) not yet paired with any invoice record",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "company": { "type": "string", "description": "Company name, id or NIP; optional when only one is configured" },
+          "limit": { "type": "integer", "default": 100 }
+        }
+      }
+    },
+    {
+      "name": "attach_file",
+      "description": "Pair an archived invoice file with an invoice: pass invoiceId to link to an existing record, or createInvoice {dir, number, issueDate, sellerNip, sellerName, net, vat, gross, currency, paid} to create a new record from the document and link it.",
+      "schema": {
+        "type": "object",
+        "required": ["fileId"],
+        "properties": {
+          "company": { "type": "string" },
+          "fileId": { "type": "string", "description": "File id from list_unmatched_files" },
+          "invoiceId": { "type": "string" },
+          "matchedBy": { "type": "string", "description": "Short note on how the pairing was decided" },
+          "createInvoice": {
+            "type": "object",
+            "properties": {
+              "dir": { "type": "string", "enum": ["sale", "cost"], "default": "cost" },
+              "number": { "type": "string" },
+              "issueDate": { "type": "string" },
+              "sellerNip": { "type": "string" },
+              "sellerName": { "type": "string" },
+              "net": { "type": "number" },
+              "vat": { "type": "number" },
+              "gross": { "type": "number" },
+              "currency": { "type": "string", "default": "PLN" },
+              "paid": { "type": "boolean" }
+            }
+          }
+        }
       }
     },
     {

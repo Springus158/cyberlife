@@ -148,9 +148,11 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/addons/http", s.handleAddonHTTP)
 	mux.HandleFunc("/api/addons/pdftext", s.handleAddonPdfText)
 	mux.HandleFunc("/api/addons/preview", s.handleAddonPreview)
+	mux.HandleFunc("/api/addons/datafile", s.handleAddonDataFile)
 	mux.HandleFunc("/api/addons/tool-result", s.handleAddonToolResult)
 	mux.HandleFunc("/api/mail/image", s.handleMailImage)
 	mux.HandleFunc("/addons/", s.handleAddonAsset)
+	mux.HandleFunc("/addons-data/", s.handleAddonDataAsset)
 	mux.HandleFunc("/api/hooks/", s.handleWebhook)
 	mux.HandleFunc("/mcp", s.handleMCP)
 
@@ -204,7 +206,13 @@ func localOnly(next http.Handler) http.Handler {
 		if !allowRequest(w, r, requireJSON) {
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		limit := int64(maxRequestBody)
+		// Data-file uploads carry base64 of a whole PDF/scan — the general
+		// cap would reject anything over ~6MB of file
+		if strings.HasPrefix(r.URL.Path, "/api/addons/datafile") {
+			limit = (maxDataFileBytes * 4 / 3) + (1 << 20)
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)
 	})
 }
