@@ -83,7 +83,8 @@ function injectStyle() {
     .ksefad-doc-head { display:flex; justify-content:space-between; align-items:baseline; gap:16px;
       border-bottom:1px solid var(--border, #45475a); padding-bottom:14px; margin-bottom:16px; }
     .ksefad-doc-head h2 { font-size:22px; margin:0; }
-    .ksefad-doc-dates div { margin-bottom:4px; }
+    .ksefad-doc-dates { min-width:300px; }
+    .ksefad-doc-dates div { display:flex; justify-content:space-between; gap:16px; margin-bottom:4px; }
     .ksefad-doc-parties { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:18px 0; }
     .ksefad-doc-party .ksefad-party-label { font-size:13px; opacity:.6; margin-bottom:6px; text-transform:uppercase; letter-spacing:.04em; }
     .ksefad-doc-party .ksefad-party-name { font-size:17px; font-weight:700; margin-bottom:4px; }
@@ -91,8 +92,8 @@ function injectStyle() {
     .ksefad-doc-table th { background:rgba(128,128,128,.12); font-weight:600; text-align:left;
       padding:10px 12px; border:1px solid var(--border, #45475a); }
     .ksefad-doc-table td { padding:10px 12px; border:1px solid var(--border, #45475a); }
-    .ksefad-doc-totals { margin-left:auto; width:max-content; font-size:16px; margin-bottom:16px; }
-    .ksefad-doc-totals div { display:flex; justify-content:flex-end; gap:24px; padding:3px 0; }
+    .ksefad-doc-totals { margin-left:auto; min-width:360px; width:max-content; font-size:16px; margin-bottom:16px; }
+    .ksefad-doc-totals div { display:flex; justify-content:space-between; gap:32px; padding:3px 0; }
     .ksefad-doc-totals .ksefad-doc-due { font-size:19px; font-weight:700; border-top:1px solid var(--border, #45475a);
       padding-top:8px; margin-top:6px; }
     .ksefad-grid { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
