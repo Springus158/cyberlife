@@ -89,6 +89,50 @@ export async function fvGovStatus({ http }, company, fvId) {
     `/invoices/${fvId}.json?fields[invoice]=gov_status,gov_id,gov_error_messages,number`);
 }
 
+// Read-only snapshot of the Fakturownia account: who the seller is there,
+// which numbering patterns the account uses (each account differs — never
+// assume one), plan and volume. Stored for display; editing happens in
+// Fakturownia itself.
+export async function fetchFakturowniaInfo(deps, company) {
+  const { http, store } = deps;
+  const account = await fvRequest(http, company, '/account.json');
+  const departments = await fvRequest(http, company, '/departments.json');
+  const dep = (Array.isArray(departments) ? departments : []).find((d) => d.main && !d.deleted)
+    || (Array.isArray(departments) ? departments[0] : null);
+  const info = {
+    fetchedAt: new Date().toISOString(),
+    account: {
+      prefix: account?.prefix || '',
+      plan: account?.plan || '',
+      paidTo: account?.paid_to || '',
+      invoices: account?.invoices ?? null,
+      lang: account?.lang || '',
+    },
+    seller: dep ? {
+      name: dep.name || '',
+      shortcut: dep.shortcut || '',
+      nip: dep.tax_no || '',
+      street: dep.street || '',
+      postCode: dep.post_code || '',
+      city: dep.city || '',
+      country: dep.country || '',
+      email: dep.email || '',
+      bank: dep.bank || '',
+      bankAccount: dep.bank_account || '',
+    } : null,
+    patterns: dep ? {
+      'Faktura VAT': dep.invoice_pattern || '',
+      'Proforma': dep.invoice_pattern_proforma || '',
+      'Korekta': dep.invoice_pattern_correction || '',
+      'Zaliczkowa': dep.invoice_pattern_advance || '',
+      'Końcowa': dep.invoice_pattern_final || '',
+      'Rachunek': dep.invoice_pattern_bill || '',
+    } : {},
+  };
+  await store.setFvInfo(company.id, info);
+  return info;
+}
+
 export async function fvSetPaid({ http }, company, fvId, paid, paidDate) {
   return fvRequest(http, company, `/invoices/${fvId}.json`, {
     method: 'PUT',
@@ -203,6 +247,8 @@ export async function importFromFakturownia({ http, store }, company, onProgress
 
   if (period === 'all') {
     await store.setSyncState(company.id, { fakturowniaImportedAt: new Date().toISOString() });
+    await fetchFakturowniaInfo({ http, store }, company)
+      .catch((err) => console.warn('[addon:ksef] fakturownia account info fetch failed:', err));
   }
   return { total: tally.total, added: tally.added, updated: tally.updated, truncated: tally.truncated };
 }

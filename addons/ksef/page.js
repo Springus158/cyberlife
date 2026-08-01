@@ -3,7 +3,7 @@
 // Settings section. All rendering is plain DOM into the container the host
 // hands us.
 
-import { importFromFakturownia } from './fakturownia.js';
+import { importFromFakturownia, fetchFakturowniaInfo } from './fakturownia.js';
 import { syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, clearTokenCache, today } from './service.js';
 import { lineNet, lineVat } from './fa3.js';
 
@@ -671,7 +671,8 @@ function companyFormHtml(c = {}) {
       <label>Address line 1<br><input data-f="address1" value="${esc(c.address1 || '')}" style="width:100%"></label>
       <label>Address line 2<br><input data-f="address2" value="${esc(c.address2 || '')}" style="width:100%"></label>
       <label>Bank account<br><input data-f="bankAccount" value="${esc(c.bankAccount || '')}" style="width:100%"></label>
-      <label>Numbering pattern<br><input data-f="numberingPattern" value="${esc(c.numberingPattern || '{nr}/{mm}/{yyyy}')}" style="width:100%" title="{nr} sequence, {mm} month, {yyyy} year"></label>
+      <label>Numbering pattern <span class="ksefad-muted" style="font-weight:400">(tylko gdy tryb Fakturownia: wyłączony)</span><br>
+        <input data-f="numberingPattern" value="${esc(c.numberingPattern || '{nr}/{mm}/{yyyy}')}" style="width:100%" title="{nr} sequence, {mm} month, {yyyy} year — w trybie dual numeruje Fakturownia wg własnego wzorca"></label>
       <label>KSeF environment<br><select data-f="env" style="width:100%">
         ${['prod', 'demo', 'test'].map((e) => `<option ${e === (c.env || 'prod') ? 'selected' : ''}>${e}</option>`).join('')}
       </select></label>
@@ -683,6 +684,23 @@ function companyFormHtml(c = {}) {
         <option value="dual" ${(fk.mode || 'dual') !== 'off' ? 'selected' : ''}>Dual — synchronizacja dwustronna</option>
         <option value="off" ${fk.mode === 'off' ? 'selected' : ''}>Wyłączony — tylko KSeF</option>
       </select></label>
+    </div>`;
+}
+
+function fvInfoHtml(info) {
+  if (!info) {
+    return '<span class="ksefad-muted">Parametry konta nie zostały jeszcze pobrane — kliknij „Odśwież" albo uruchom import.</span>';
+  }
+  const s = info.seller || {};
+  const patterns = Object.entries(info.patterns || {}).filter(([, v]) => v);
+  return `
+    <div style="display:flex; flex-direction:column; gap:4px; margin-top:8px">
+      <div><b>Konto:</b> ${esc(info.account?.prefix || '?')}.fakturownia.pl · plan ${esc(info.account?.plan || '—')} · ${esc(String(info.account?.invoices ?? '—'))} dokumentów</div>
+      ${s.name ? `<div><b>Sprzedawca:</b> ${esc(s.name)} · NIP ${esc(s.nip || '—')}</div>
+      <div class="ksefad-muted">${esc(s.street || '')}${s.street ? ', ' : ''}${esc(s.postCode || '')} ${esc(s.city || '')}${s.email ? ` · ${esc(s.email)}` : ''}</div>
+      ${s.bankAccount ? `<div class="ksefad-muted">Bank: ${esc(s.bank || '')} ${esc(s.bankAccount)}</div>` : ''}` : ''}
+      ${patterns.length ? `<div><b>Wzorce numeracji:</b> ${patterns.map(([k, v]) => `${esc(k)}: <code>${esc(v)}</code>`).join(' · ')}</div>` : ''}
+      <div class="ksefad-muted" style="font-size:.9em">Pobrano ${esc(String(info.fetchedAt || '').replace('T', ' ').slice(0, 19))}</div>
     </div>`;
 }
 
@@ -708,6 +726,16 @@ export function renderSettings(el, deps) {
               <button class="ksefad-btn ksefadDelete">Delete</button>
             </div>
             <div class="ksefad-status ksefad-muted"></div>
+            ${(c.fakturownia?.subdomain && c.fakturownia?.token) ? `
+              <div style="margin-top:10px; border:1px solid var(--border,#334155); border-radius:8px; padding:10px 12px">
+                <div style="display:flex; align-items:center; gap:8px">
+                  <b>Parametry Fakturowni</b>
+                  <span class="ksefad-muted">tylko do odczytu — edycja w Fakturowni</span>
+                  <span style="flex:1"></span>
+                  <button class="ksefad-btn ksefadFvRefresh">Odśwież</button>
+                </div>
+                <div class="ksefad-fvinfo">${fvInfoHtml(store.fvInfo(c.id))}</div>
+              </div>` : ''}
           </div>
         </details>`).join('')}
     </div>
@@ -757,6 +785,17 @@ export function renderSettings(el, deps) {
       }
       e.target.disabled = false;
     };
+    box.querySelector('.ksefadFvRefresh')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try {
+        const info = await fetchFakturowniaInfo(deps, readForm(box, id));
+        box.querySelector('.ksefad-fvinfo').innerHTML = fvInfoHtml(info);
+      } catch (err) {
+        deps.cl.log('fakturownia info fetch failed:', err);
+        status.textContent = `Nie udało się pobrać parametrów: ${err.message || err}`;
+      }
+      e.target.disabled = false;
+    });
     box.querySelector('.ksefadTestKsef').onclick = async (e) => {
       e.target.disabled = true;
       const company = readForm(box, id);

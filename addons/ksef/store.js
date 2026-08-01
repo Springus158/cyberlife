@@ -61,7 +61,7 @@ export function createStore(cl) {
 
   async function deleteCompany(id) {
     for (const key of Object.keys(cache)) {
-      if (key.startsWith(`inv:${id}:`) || key === `contractors:${id}` || key === `sync:${id}`) {
+      if (key.startsWith(`inv:${id}:`) || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}`) {
         await drop(key);
       }
     }
@@ -291,6 +291,16 @@ export function createStore(cl) {
     await put(`sync:${companyId}`, { ...syncState(companyId), ...patch });
   }
 
+  // ---- Fakturownia account snapshot (read-only display) ----
+
+  function fvInfo(companyId) {
+    return cache[`fvinfo:${companyId}`] || null;
+  }
+
+  async function setFvInfo(companyId, info) {
+    await put(`fvinfo:${companyId}`, info);
+  }
+
   return {
     init,
     companies,
@@ -306,5 +316,7 @@ export function createStore(cl) {
     upsertContractors,
     syncState,
     setSyncState,
+    fvInfo,
+    setFvInfo,
   };
 }
