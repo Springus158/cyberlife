@@ -96,7 +96,16 @@ export function createStore(cl) {
 
   function sameInvoice(a, b) {
     if (a.dir !== b.dir) return false;
+    // Identity fields are definitive when both sides carry them
+    if (a.id && b.id && a.id === b.id) return true;
     if (a.ksefNumber && b.ksefNumber) return a.ksefNumber === b.ksefNumber;
+    if (a.fvId && b.fvId) return a.fvId === b.fvId;
+    // Documents without a number (some expense entries) can only match by
+    // their content — party, date and amount — or every re-import would
+    // insert a fresh copy
+    if (!a.number && !b.number) {
+      return a.sellerNip === b.sellerNip && a.issueDate === b.issueDate && a.gross === b.gross;
+    }
     if (!a.number || a.number !== b.number) return false;
     // Invoice numbers restart per issuer, so a number alone identifies
     // nothing — require a matching party, or failing that the same document
