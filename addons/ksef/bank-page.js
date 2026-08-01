@@ -442,12 +442,18 @@ async function ingestFiles(el, deps, company, files) {
       try {
         const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))]
           .map((x) => x.toString(16).padStart(2, '0')).join('');
-        const months = [...new Set(st.txs.map((t) => t.date.slice(0, 7)))].sort();
-        const year = (months[0] || st.period.slice(6, 10) || 'inne').slice(0, 4);
+        let months = [...new Set(st.txs.map((t) => t.date.slice(0, 7)))].sort();
+        if (!months.length) {
+          // Empty statements (unused VAT account) still belong to the month
+          // in their period header — never to "always"
+          const m = /(\d{2})\.(\d{2})\.(\d{4})/.exec(st.period || '');
+          if (m) months = [`${m[3]}-${m[2]}`];
+        }
+        const year = (months[0] || 'inne').slice(0, 4);
         const safe = file.name.normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 70);
         const key = `statements/${year}/${sha.slice(0, 12)}-${safe}`;
         const added = await store.addStmtFile(company.id, {
-          key, name: file.name, sha256: sha, account: st.account, currency: st.currency, period: st.period, months,
+          key, name: file.name, sha256: sha, account: st.account, currency: st.currency, period: st.period, months, ops: st.txs.length,
         });
         if (added) await cl.putDataFile(key, b64);
       } catch (err) {

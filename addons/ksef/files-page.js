@@ -59,7 +59,7 @@ function filesForView(store, company) {
         if (toM && m > toM) return false;
         return true;
       })
-      .map((s) => ({ stmt: true, id: s.sha256.slice(0, 16), key: s.key, name: s.name, month: s.months?.[0] || '', account: s.account, period: s.period, currency: s.currency }));
+      .map((s) => ({ stmt: true, id: s.sha256.slice(0, 16), key: s.key, name: s.name, month: s.months?.[0] || '', account: s.account, period: s.period, currency: s.currency, ops: s.ops }));
     list = [...list, ...stmts].sort((a, b) => String(b.docDate || b.month || '').localeCompare(String(a.docDate || a.month || '')));
   }
   if (filesView.query) {
@@ -129,7 +129,7 @@ export function renderFilesPage(el, deps) {
                 <td style="max-width:340px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap" title="${esc(f.name)}">🏦 ${esc(f.name)}</td>
                 <td class="ksefad-muted">…${esc((f.account || '').slice(-4))} ${esc(f.currency || '')}</td>
                 <td style="text-align:right" class="ksefad-muted">—</td>
-                <td class="ksefad-muted">wyciąg bankowy · ${esc(f.period || '')}</td>
+                <td class="ksefad-muted">wyciąg bankowy${f.ops === 0 ? ' <span title="konto VAT bez ruchu w tym miesiącu">(0 operacji)</span>' : ''} · ${esc(f.period || '')}</td>
                 <td style="text-align:center"><button class="ksefad-btn" data-preview-stmt="${esc(f.key)}">📄</button></td>
               </tr>`;
               }
