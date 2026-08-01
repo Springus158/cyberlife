@@ -317,7 +317,10 @@ function openCreateCostForm(el, deps, company, rec) {
         <label class="adk-field"><span>Numer dokumentu</span><input id="fcNumber" value="${esc(rec.number || '')}"></label>
         <label class="adk-field"><span>Data wystawienia</span><input id="fcDate" type="date" value="${esc(rec.docDate || `${rec.month || currentMonth()}-01`)}"></label>
         <label class="adk-field"><span>Sprzedawca</span><input id="fcSeller" value="${esc(rec.name.replace(/\.(pdf|png|jpe?g)$/i, '').replace(/[_-]+/g, ' '))}"></label>
-        <label class="adk-field"><span>NIP sprzedawcy</span><input id="fcNip" value="${esc(rec.nip || '')}"></label>
+        <label class="adk-field"><span>NIP sprzedawcy</span><input id="fcNip" value="${esc(rec.nip || '')}" placeholder="polski NIP (cyfry)"></label>
+        <label class="adk-field"><span>VAT ID (zagraniczny)</span><input id="fcVatId" placeholder="np. IE9692928F"></label>
+        <label class="adk-field"><span>Adres — ulica</span><input id="fcAddr1"></label>
+        <label class="adk-field"><span>Kod, miasto, kraj</span><input id="fcAddr2" placeholder="np. D04 X2K5 Dublin 4, Ireland"></label>
         <label class="adk-field"><span>Kwota brutto</span><input id="fcGross" type="number" step="0.01" value="${rec.gross || ''}"></label>
         <label class="adk-field"><span>Waluta</span>
           <select id="fcCurrency">
@@ -359,6 +362,9 @@ function openCreateCostForm(el, deps, company, rec) {
         issueDate: val('#fcDate'),
         sellerName: val('#fcSeller'),
         sellerNip: val('#fcNip'),
+        sellerVatId: val('#fcVatId'),
+        sellerAddress1: val('#fcAddr1'),
+        sellerAddress2: val('#fcAddr2'),
         gross,
         currency: val('#fcCurrency'),
         vatRate: /^\d+$/.test(vatSel) ? Number(vatSel) : vatSel,

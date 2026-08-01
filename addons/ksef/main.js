@@ -381,7 +381,8 @@ export default async function activate(cl) {
     const inv = store.getInvoice(args.id);
     if (!inv) throw new Error(`invoice ${args.id} not found`);
     const patch = {};
-    for (const field of ['number', 'issueDate', 'currency', 'gross', 'net', 'vat', 'sellerName', 'sellerNip', 'buyerName', 'buyerNip']) {
+    for (const field of ['number', 'issueDate', 'currency', 'gross', 'net', 'vat', 'sellerName', 'sellerNip',
+      'sellerVatId', 'sellerAddress1', 'sellerAddress2', 'buyerName', 'buyerNip', 'buyerAddress1', 'buyerAddress2']) {
       if (args[field] !== undefined) patch[field] = args[field];
     }
     if (patch.issueDate) assertDate(patch.issueDate, 'issueDate');
@@ -424,6 +425,9 @@ export default async function activate(cl) {
         issueDate: c.issueDate || rec.docDate || `${rec.month}-01`,
         sellerNip: c.sellerNip || rec.nip || '',
         sellerName: c.sellerName || rec.name,
+        sellerVatId: c.sellerVatId || '',
+        sellerAddress1: c.sellerAddress1 || '',
+        sellerAddress2: c.sellerAddress2 || '',
         gross: Number(c.gross) || rec.gross || 0,
         currency: c.currency || rec.currency || 'PLN',
         vatRate: c.vatRate ?? rec.vatRate ?? 'disabled',

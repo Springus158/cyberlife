@@ -102,8 +102,15 @@ export async function createCostInFakturownia({ http }, company, data) {
         currency: data.currency || 'PLN',
         department_id: department.id,
         buyer_name: data.sellerName,
-        buyer_tax_no: data.sellerNip || '',
+        buyer_tax_no: data.sellerNip || data.sellerVatId || '',
         buyer_company: true,
+        ...(data.sellerAddress1 ? { buyer_street: data.sellerAddress1 } : {}),
+        ...(data.sellerAddress2 ? (() => {
+          const m = /^([A-Z0-9 -]{3,10})\s+(.+?)(?:,\s*(.+))?$/i.exec(data.sellerAddress2.trim());
+          return m
+            ? { buyer_post_code: m[1], buyer_city: m[2], ...(m[3] ? { buyer_country: m[3] } : {}) }
+            : { buyer_city: data.sellerAddress2 };
+        })() : {}),
         status: data.paid ? 'paid' : 'issued',
         ...(data.paid && data.paidDate ? { paid_date: data.paidDate } : {}),
         positions: [{

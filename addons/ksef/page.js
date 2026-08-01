@@ -682,7 +682,7 @@ function openDetail(el, deps, id) {
       <div class="ksefad-party-name">${esc(name || '—')}</div>
       ${addr1 ? `<div>${esc(addr1)}</div>` : ''}
       ${addr2 ? `<div>${esc(addr2)}</div>` : ''}
-      ${nip ? `<div class="ksefad-muted">NIP ${esc(nip)}</div>` : ''}
+      ${nip ? `<div class="ksefad-muted">${/^\d/.test(String(nip)) ? 'NIP ' : 'VAT '}${esc(nip)}</div>` : ''}
       ${bank ? `<div class="ksefad-muted" style="margin-top:6px">Rachunek: ${esc(bank)}</div>` : ''}
     </div>`;
   const isSale = inv.dir === 'sale';
@@ -697,7 +697,7 @@ function openDetail(el, deps, id) {
         </div>
       </div>
       <div class="ksefad-doc-parties">
-        ${party('Sprzedawca', inv.sellerName, inv.sellerNip, null, null, isSale && inv.src === 'local' ? company?.bankAccount : null)}
+        ${party('Sprzedawca', inv.sellerName, inv.sellerNip || inv.sellerVatId, inv.sellerAddress1, inv.sellerAddress2, isSale && inv.src === 'local' ? company?.bankAccount : null)}
         ${party('Nabywca', inv.buyerName, inv.buyerNip, inv.buyerAddress1, inv.buyerAddress2, null)}
       </div>
       ${(inv.lines || []).length ? `
