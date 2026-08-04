@@ -154,6 +154,19 @@ live (`kanban-changed`, `automations-changed`, `widgets-changed`, …).
      to PDF on the host (sips/ImageMagick). `dataFileUrl` returns a URL
      the webview can load directly (`<embed>` renders PDFs natively) —
      keep only file KEYS in `cl.storage`, never the bytes
+   - `cl.backup(action, config?, {job?, keys?})` — mirror the addon's blob
+     store into an S3-compatible bucket (Cloudflare R2). `'start'` launches
+     a background job on the host, `'status'` polls it (the final status
+     carries an `objects` manifest of `relPath → {etag, size}`), `'test'`
+     verifies credentials by listing the bucket. `config` is
+     `{endpoint, bucket, accessKeyId, secretAccessKey, prefix?}` — the
+     addon stores it (in `cl.storage`); the host keeps it only for the
+     running job. `job` keeps concurrent backups of one addon apart (e.g.
+     one bucket per company — pass the same `job` when polling), `keys`
+     limits the upload to those blob-store paths. Upload-only: nothing is
+     deleted remotely.
+   - `cl.openUrl(url)` — open an http(s) URL in the system browser
+     (in-webview navigation would replace the app)
    - `cl.log(…)` — prefixed console logging
 3. `addons_reload` (hot reload), then `addons_list` to check for manifest
    errors. New addons are DISABLED until enabled (`addons_set_enabled`

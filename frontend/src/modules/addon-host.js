@@ -10,6 +10,7 @@ import { registerAddonSettingsSection, removeAddonSettingsSections, refreshSetti
 import { setBuiltinStates } from './addon-state.js';
 import { renderModuleBar, getModules, getVisibleModules } from './shell.js';
 import { AddonsList, AddonStorageAll, AddonStorageSet, AddonStorageDelete, AddonSendEmail, GetGmailConfig } from '../../wailsjs/go/main/App.js';
+import { BrowserOpenURL } from '../../wailsjs/runtime/runtime.js';
 import { API_BASE } from './utils.js';
 
 const active = new Map(); // addon id -> { addon, dispose, cleanups }
@@ -327,6 +328,25 @@ function makeContext(addon, inst) {
       return res.json();
     },
 
+    // Mirror this addon's blob store into an S3-compatible bucket (R2).
+    // action: 'start' kicks off a background job, 'status' polls it (the
+    // final status carries an objects manifest), 'test' verifies the
+    // credentials by listing the bucket. Credentials are the addon's to
+    // store — the host keeps them only for the running job. `job` keeps
+    // concurrent backups apart (one per company), `keys` limits the upload
+    // to those blob-store paths instead of the whole store.
+    async backup(action, config, { job = '', keys = undefined } = {}) {
+      const res = await fetch(`${API_BASE}/api/addons/backup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addon: addon.id, action, config, job, keys }),
+      });
+      if (!res.ok) {
+        throw new Error(`backup ${action}: ${res.status} ${await res.text()}`);
+      }
+      return res.json();
+    },
+
     // Configured Gmail account addresses — for "send as" pickers
     async listEmailAccounts() {
       const cfg = await GetGmailConfig();
@@ -338,6 +358,13 @@ function makeContext(addon, inst) {
     async sendEmail({ account = '', to, cc = '', subject, body, attachmentKeys = [] }) {
       if (!to) throw new Error('sendEmail needs a recipient');
       await AddonSendEmail(addon.id, account, to, cc, subject, body, attachmentKeys);
+    },
+
+    // Open an http(s) URL in the system browser — in-webview navigation
+    // would replace the whole app
+    openUrl(url) {
+      if (!/^https?:/i.test(String(url))) throw new Error(`openUrl: not an http(s) URL: ${url}`);
+      BrowserOpenURL(url);
     },
 
     dataFileUrl(path) {

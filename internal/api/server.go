@@ -69,6 +69,9 @@ type Server struct {
 
 	addonCallsMu sync.Mutex
 	addonCalls   map[string]pendingAddonCall
+
+	backupsMu sync.Mutex
+	backups   map[string]*backupJob
 }
 
 func NewServer(manager *state.Manager, hooks Hooks) *Server {
@@ -152,6 +155,7 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/addons/pdfmerge", s.handleAddonPdfMerge)
 	mux.HandleFunc("/api/addons/htmltopdf", s.handleAddonHTMLToPdf)
 	mux.HandleFunc("/api/addons/tool-result", s.handleAddonToolResult)
+	mux.HandleFunc("/api/addons/backup", s.handleAddonBackup)
 	mux.HandleFunc("/api/mail/image", s.handleMailImage)
 	mux.HandleFunc("/addons/", s.handleAddonAsset)
 	mux.HandleFunc("/addons-data/", s.handleAddonDataAsset)
