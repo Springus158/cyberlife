@@ -138,7 +138,7 @@
     },
     {
       "name": "assign_bank_transaction",
-      "description": "Pair a bank operation with an invoice (invoiceId), give it a non-invoice category, unassign it, or verify a tentative auto-match (verify: true).",
+      "description": "Pair a bank operation with an invoice (invoiceId), give it a non-invoice category, link it with its refund (refundTxId — cancelled charge + incoming refund cancel out, state 'ret'), unassign it, or verify a tentative auto-match (verify: true).",
       "schema": {
         "type": "object",
         "required": ["txId"],
@@ -146,9 +146,10 @@
           "company": { "type": "string" },
           "txId": { "type": "string", "description": "Operation id from list_bank_transactions" },
           "invoiceId": { "type": "string" },
-          "category": { "type": "string", "description": "e.g. opłata bankowa, podatek / ZUS, przewalutowanie" },
+          "category": { "type": "string", "description": "e.g. opłata bankowa, podatek / ZUS, przewalutowanie; 'NKUP — bez odliczenia' marks an expense with no invoice at all (accountant books it as other costs, no tax deduction)" },
           "matchedBy": { "type": "string", "description": "Short note on how the pairing was decided" },
           "unassign": { "type": "boolean" },
+          "refundTxId": { "type": "string", "description": "Id of the opposite operation (equal amount, opposite sign) — links the two as a cancelled-charge/refund pair" },
           "verify": { "type": "boolean", "description": "Confirm a match labeled 'do weryfikacji'" }
         }
       }
@@ -283,6 +284,17 @@
         "properties": {
           "company": { "type": "string" },
           "limit": { "type": "integer", "default": 30 }
+        }
+      }
+    },
+    {
+      "name": "backup_r2",
+      "description": "Mirror a company's file archive (invoices and original statements) into that company's Cloudflare R2 bucket and refresh the per-file backup manifest. action 'status' only reports the configuration and last run without uploading.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "company": { "type": "string", "description": "Company name, id or NIP; optional when only one is configured" },
+          "action": { "type": "string", "enum": ["run", "status"], "default": "run" }
         }
       }
     },

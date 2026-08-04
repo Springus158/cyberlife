@@ -5,10 +5,10 @@
 
 import {
   injectStyle, currentMonth, monthAdd, periodBarHtml, bindPeriodBar, periodOf,
-  activeCompany, openPdfOverlay, invDesc,
+  activeCompany, openPdfOverlay, invDesc, r2DashUrl,
 } from './page.js';
 import { extractFields, matchFileToInvoice } from './files.js';
-import { createCostFromFile } from './service.js';
+import { createCostFromFile, ensureFileExtraction } from './service.js';
 import { fakturowniaMode } from './fakturownia.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -98,6 +98,10 @@ export function renderFilesPage(el, deps) {
   const all = store.files(company.id);
   const linked = all.filter((f) => f.invoiceId).length;
   const invIndex = new Map(store.listInvoices({ companyId: company.id }).map((i) => [i.id, i]));
+  const r2 = store.r2Index(company.id);
+  const r2Cell = (key) => (r2.has(key)
+    ? `<button class="ksefad-btn" data-r2="${esc(key)}" title="kopia w R2 — otwórz w panelu Cloudflare">☁️</button>`
+    : `<span class="ksefad-muted" title="${store.r2Config(company.id) ? 'jeszcze bez kopii w R2 — uruchom backup' : 'backup R2 nie jest skonfigurowany'}">—</span>`);
 
   el.innerHTML = `
     <div class="ksefad">
@@ -119,7 +123,7 @@ export function renderFilesPage(el, deps) {
       </div>
       <div class="ksefad-scroll">
         <table class="ksefad-table">
-          <thead><tr><th>Data</th><th>Plik</th><th>Numer</th><th>Kwota</th><th>Faktura w systemie</th><th>PDF</th></tr></thead>
+          <thead><tr><th>Data</th><th>Plik</th><th>Numer</th><th>Kwota</th><th>Faktura w systemie</th><th>PDF</th><th title="kopia w Cloudflare R2">R2</th></tr></thead>
           <tbody>
             ${list.map((f, i) => {
               if (f.stmt) {
@@ -131,6 +135,7 @@ export function renderFilesPage(el, deps) {
                 <td style="text-align:right" class="ksefad-muted">—</td>
                 <td class="ksefad-muted">wyciąg bankowy${f.ops === 0 ? ' <span title="konto VAT bez ruchu w tym miesiącu">(0 operacji)</span>' : ''} · ${esc(f.period || '')}</td>
                 <td style="text-align:center"><button class="ksefad-btn" data-preview-stmt="${esc(f.key)}">📄</button></td>
+                <td style="text-align:center">${r2Cell(f.key)}</td>
               </tr>`;
               }
               const inv = f.invoiceId ? invIndex.get(f.invoiceId) : null;
@@ -144,6 +149,7 @@ export function renderFilesPage(el, deps) {
                   ? `${esc(inv.number || inv.ksefNumber || '—')} <span class="ksefad-muted">${esc(invDesc(inv, 40))}</span>`
                   : '<span style="color:var(--error, #f38ba8)">✗ brak</span>'}</td>
                 <td style="text-align:center"><button class="ksefad-btn" data-preview="${esc(f.id)}">📄</button></td>
+                <td style="text-align:center">${r2Cell(f.key)}</td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -174,6 +180,12 @@ export function renderFilesPage(el, deps) {
     box.onchange = () => {
       filesView.types[box.dataset.ftype] = box.checked;
       renderFilesPage(el, deps);
+    };
+  });
+  el.querySelectorAll('[data-r2]').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      deps.cl.openUrl(r2DashUrl(store.r2Config(company.id), btn.dataset.r2));
     };
   });
   el.querySelectorAll('[data-preview-stmt]').forEach((btn) => {
@@ -298,6 +310,9 @@ function openFileDetail(el, deps, company, rec) {
           <div><b>Kwota (odczytana):</b> ${rec.gross ? zl(rec.gross, rec.currency || 'PLN') : '—'}</div>
           <div><b>Źródło:</b> ${esc(rec.source || '—')}</div>
           ${rec.matchedBy ? `<div><b>Dopasowano po:</b> ${esc(rec.matchedBy)}</div>` : ''}
+          <div><b>Backup R2:</b> ${store.r2Index(company.id).has(rec.key)
+            ? '☁️ w chmurze <button class="adk-btn" id="fdR2" style="padding:2px 8px">Otwórz w Cloudflare</button>'
+            : `<span class="ksefad-muted">${store.r2Config(company.id) ? 'jeszcze bez kopii — uruchom backup w Ustawieniach' : 'nie skonfigurowany'}</span>`}</div>
         </div>
         <div class="adk-kv">
           <div><b>Faktura w systemie:</b></div>
@@ -321,6 +336,9 @@ function openFileDetail(el, deps, company, rec) {
   const rerender = () => renderFilesPage(el, deps);
   overlay.onclick = (e) => { if (e.target === overlay) close(); };
   overlay.querySelector('#fdClose').onclick = close;
+  overlay.querySelector('#fdR2')?.addEventListener('click', () => {
+    deps.cl.openUrl(r2DashUrl(store.r2Config(company.id), rec.key));
+  });
   overlay.querySelector('#fdAssign').onclick = () => {
     close();
     openAssignFileModal(el, deps, company, rec);
@@ -356,8 +374,9 @@ const VAT_OPTIONS = [
 // Creating an invoice record out of a document needs a human glance at the
 // extracted fields (currency and VAT above all) — and ends with explicit
 // confirmation of what landed where (system + Fakturownia in dual mode)
-function openCreateCostForm(el, deps, company, rec) {
+async function openCreateCostForm(el, deps, company, rec) {
   const { store } = deps;
+  rec = await ensureFileExtraction(deps, company, rec);
   const dual = fakturowniaMode(company) === 'dual';
   const defaultVat = rec.vatRate ?? (rec.currency && rec.currency !== 'PLN' ? 'np' : '23');
   const overlay = document.createElement('div');

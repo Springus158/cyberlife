@@ -101,6 +101,7 @@ export async function createCostInFakturownia({ http }, company, data) {
         sell_date: data.issueDate,
         currency: data.currency || 'PLN',
         department_id: department.id,
+        ...(data.clientId ? { client_id: data.clientId } : {}),
         buyer_name: data.sellerName,
         buyer_tax_no: data.sellerNip || data.sellerVatId || '',
         buyer_company: true,

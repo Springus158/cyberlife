@@ -262,7 +262,7 @@ export function matchTransactions(txs, invoices, opts = {}) {
   // the guard across months, since a run usually covers just one bucket.
   const used = new Set([...txs.map((t) => t.invoiceId).filter(Boolean), ...(opts.usedInvoiceIds || [])]);
   return txs.map((tx) => {
-    if (tx.invoiceId || tx.category) return tx;
+    if (tx.invoiceId || tx.category || tx.refundTxId) return tx;
     const wantDir = tx.amount < 0 ? 'cost' : 'sale';
     const amountOk = (inv) => Math.abs(Math.abs(tx.amount) - inv.gross) < 0.015;
     const descNorm = normToken(tx.desc);

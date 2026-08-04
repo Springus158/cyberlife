@@ -7,7 +7,10 @@ import {
   importFromFakturownia, fetchFakturowniaInfo, fetchFakturowniaClients, fakturowniaMode,
   fvUpdateClientBankAccount,
 } from './fakturownia.js';
-import { syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, clearTokenCache, today } from './service.js';
+import {
+  syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, clearTokenCache, today,
+  runR2Backup, r2Configured,
+} from './service.js';
 import { lineNet, lineVat } from './fa3.js';
 import { normalizeNip } from './store.js';
 
@@ -91,6 +94,8 @@ export function injectStyle() {
     .ksefad-row-bad td:first-child { box-shadow: inset 3px 0 0 rgba(243,139,168,.6); }
     .ksefad-row-in td { background: rgba(148,226,213,.06); }
     .ksefad-row-in td:first-child { box-shadow: inset 3px 0 0 rgba(148,226,213,.55); }
+    .ksefad-row-ret td { background: rgba(180,190,254,.07); }
+    .ksefad-row-ret td:first-child { box-shadow: inset 3px 0 0 rgba(180,190,254,.6); }
     .ksefad-table tr.sel td, .ksefad-table tbody tr:hover td { background: rgba(137,180,250,.08); cursor:pointer; }
     .ksefad-scroll { overflow:auto; flex:1; min-height:0; }
     .ksefad-badge { font-size:.85em; border:1px solid; border-radius:10px; padding:0 7px; white-space:nowrap; }
@@ -1261,6 +1266,103 @@ export function renderUnpaidWidget(el, deps) {
 // for the "send reports as" combo
 let emailAccountsCache = [];
 
+function r2StatusLine(store, companyId) {
+  const cfg = store.r2Config(companyId);
+  if (!r2Configured(store, companyId)) return 'Backup R2 nie jest skonfigurowany';
+  const last = cfg.last;
+  if (!last?.at) return `bucket ${cfg.bucket} — jeszcze bez backupu`;
+  const when = String(last.at).replace('T', ' ').slice(0, 16);
+  return `bucket ${cfg.bucket} · ostatni backup ${when} · ${store.r2Manifest(companyId).length} plików w chmurze`
+    + (last.failed ? ` · ⚠ ${last.failed} błędów` : '');
+}
+
+// Deep link to the object's page in the Cloudflare dashboard — the bucket
+// is private, so a direct https link to the object would only 403
+export function r2DashUrl(cfg, key) {
+  if (!cfg?.bucket) return '';
+  const prefix = String(cfg.prefix || '').replace(/^\/+|\/+$/g, '');
+  const fullKey = (prefix ? `${prefix}/` : '') + key;
+  return `https://dash.cloudflare.com/?to=/:account/r2/default/buckets/${encodeURIComponent(cfg.bucket)}/objects/${encodeURIComponent(fullKey)}/details`;
+}
+
+function openR2Modal(deps, company, onDone) {
+  const { store, cl } = deps;
+  const cfg = store.r2Config(company.id) || {};
+  const overlay = document.createElement('div');
+  overlay.className = 'ksefad-overlay modal-overlay';
+  overlay.innerHTML = `
+    <div class="ksefad-modal lg" style="width:min(640px, 92vw)">
+      <h2 style="margin-bottom:6px">☁️ Backup R2 — ${esc(company.name)}</h2>
+      <div class="ksefad-muted" style="margin-bottom:14px">Kopia archiwum plików tej firmy (faktury i wyciągi)
+        do osobnego bucketa S3/R2. Tylko wysyłka — nic nie jest usuwane z chmury.</div>
+      <div class="adk-form">
+        <label class="adk-field"><span>Endpoint S3</span><input id="r2Endpoint" value="${esc(cfg.endpoint || '')}" placeholder="https://<account>.r2.cloudflarestorage.com"></label>
+        <label class="adk-field"><span>Bucket</span><input id="r2Bucket" value="${esc(cfg.bucket || '')}"></label>
+        <label class="adk-field"><span>Access Key ID</span><input id="r2AccessKey" value="${esc(cfg.accessKeyId || '')}"></label>
+        <label class="adk-field"><span>Secret Access Key</span><input id="r2Secret" type="password" value="${esc(cfg.secretAccessKey || '')}"></label>
+        <label class="adk-field"><span>Prefiks kluczy <small>(opcjonalny podkatalog w buckecie)</small></span><input id="r2Prefix" value="${esc(cfg.prefix || '')}" placeholder="np. cyberlife"></label>
+        <label class="adk-field" style="flex-direction:row; align-items:center; gap:8px">
+          <input type="checkbox" id="r2Auto" ${cfg.auto ? 'checked' : ''} style="width:auto"><span>Automatyczny backup po każdej synchronizacji</span></label>
+      </div>
+      <div class="adk-actions" style="margin-top:14px">
+        <button class="adk-btn primary" id="r2Save">Zapisz</button>
+        <button class="adk-btn" id="r2Test">Test połączenia</button>
+        <button class="adk-btn" id="r2Run">Backup teraz</button>
+        <span style="flex:1"></span>
+        <button class="adk-btn" id="r2Close">Zamknij</button>
+      </div>
+      <div class="adk-status" id="r2Status">${esc(r2StatusLine(store, company.id))}${cfg.last?.error ? ` · ostatni błąd: ${esc(cfg.last.error)}` : ''}</div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const status = overlay.querySelector('#r2Status');
+  const close = () => { overlay.remove(); onDone?.(); };
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('#r2Close').onclick = close;
+
+  const readConfig = () => ({
+    ...(store.r2Config(company.id) || {}),
+    endpoint: overlay.querySelector('#r2Endpoint').value.trim().replace(/\/+$/, ''),
+    bucket: overlay.querySelector('#r2Bucket').value.trim(),
+    accessKeyId: overlay.querySelector('#r2AccessKey').value.trim(),
+    secretAccessKey: overlay.querySelector('#r2Secret').value.trim(),
+    prefix: overlay.querySelector('#r2Prefix').value.trim(),
+    auto: overlay.querySelector('#r2Auto').checked,
+  });
+
+  overlay.querySelector('#r2Save').onclick = async () => {
+    await store.saveR2Config(company.id, readConfig());
+    status.textContent = 'Zapisano konfigurację.';
+  };
+  overlay.querySelector('#r2Test').onclick = async (e) => {
+    e.target.disabled = true;
+    status.textContent = 'Sprawdzam połączenie z bucketem…';
+    try {
+      const next = readConfig();
+      await store.saveR2Config(company.id, next);
+      const res = await cl.backup('test', next);
+      status.textContent = `✓ Połączenie działa — w buckecie ${res.remoteObjects} obiektów.`;
+    } catch (err) {
+      cl.log('r2 test failed:', err);
+      status.textContent = `✗ ${err.message || err}`;
+    }
+    e.target.disabled = false;
+  };
+  overlay.querySelector('#r2Run').onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      await store.saveR2Config(company.id, readConfig());
+      const st = await runR2Backup(deps, company, {
+        onProgress: (p) => { status.textContent = `Backup… sprawdzono ${p.checked}, wysłano ${p.uploaded}${p.failed ? `, błędów ${p.failed}` : ''}`; },
+      });
+      status.textContent = `✓ Backup zakończony: wysłano ${st.uploaded}, bez zmian ${st.skipped}${st.failed ? `, błędów ${st.failed} (${st.lastError})` : ''}.`;
+    } catch (err) {
+      cl.log('r2 backup failed:', err);
+      status.textContent = `✗ ${err.message || err}`;
+    }
+    e.target.disabled = false;
+  };
+}
+
 function companyFormHtml(c = {}) {
   const fk = c.fakturownia || {};
   return `
@@ -1335,6 +1437,7 @@ export function renderSettings(el, deps) {
             <button class="adk-btn primary ksefadSaveCompany">Zapisz</button>
             <button class="adk-btn ksefadImport">Import z Fakturowni</button>
             <button class="adk-btn ksefadTestKsef">Test połączenia z KSeF</button>
+            <button class="adk-btn ksefadR2" title="${esc(r2StatusLine(store, c.id))}">☁️ Backup R2…</button>
             <span style="flex:1"></span>
             <button class="adk-btn danger ksefadDelete">Usuń</button>
           </div>
@@ -1411,6 +1514,10 @@ export function renderSettings(el, deps) {
       }
       e.target.disabled = false;
     });
+    box.querySelector('.ksefadR2').onclick = () => {
+      const company = store.company(id);
+      if (company) openR2Modal(deps, company, () => renderSettings(el, deps));
+    };
     box.querySelector('.ksefadTestKsef').onclick = async (e) => {
       e.target.disabled = true;
       const company = readForm(box, id);

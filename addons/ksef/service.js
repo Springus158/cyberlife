@@ -4,10 +4,63 @@
 import { KsefClient } from './ksef-client.js';
 import { buildFa3Xml, computeTotals, lineNet, lineVat } from './fa3.js';
 import { assertDate, normalizeNip } from './store.js';
+import { extractFields } from './files.js';
 import {
   fakturowniaMode, createInFakturownia, createCostInFakturownia, fvSendToKsef, fvGovStatus, fvSetPaid,
   importFromFakturownia, fetchFakturowniaClients, fetchFvPdf,
 } from './fakturownia.js';
+
+export function r2Configured(store, companyId) {
+  const cfg = store.r2Config(companyId);
+  return !!(cfg?.endpoint && cfg?.bucket && cfg?.accessKeyId && cfg?.secretAccessKey);
+}
+
+// The blob-store paths carry no company segment, so a company's backup is
+// defined by its registries: invoice files + original statements
+export function r2KeysFor(store, companyId) {
+  return [...new Set([
+    ...store.files(companyId).map((f) => f.key),
+    ...store.stmtFiles(companyId).map((s) => s.key),
+  ])].filter(Boolean);
+}
+
+// Mirror one company's files into its R2 bucket and persist the resulting
+// manifest, so every file record can show whether its bytes are safe in
+// the bucket. One job per company host-side; a start during a run just
+// re-attaches.
+export async function runR2Backup(deps, company, { onProgress } = {}) {
+  const { store, cl } = deps;
+  if (!r2Configured(store, company.id)) {
+    throw new Error(`Backup R2 firmy ${company.name} nie jest skonfigurowany — uzupełnij dane w Ustawieniach → KSeF`);
+  }
+  const cfg = store.r2Config(company.id);
+  const opts = { job: company.id, keys: r2KeysFor(store, company.id) };
+  await cl.backup('start', cfg, opts);
+  let st;
+  do {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    st = await cl.backup('status', undefined, { job: company.id });
+    onProgress?.(st);
+  } while (st.running);
+  if (st.objects) {
+    const entries = Object.entries(st.objects).map(([key, o]) => ({ key, etag: o.etag, size: o.size }));
+    await store.saveR2Manifest(company.id, entries, {
+      at: st.finishedAt || new Date().toISOString(),
+      checked: st.checked,
+      uploaded: st.uploaded,
+      failed: st.failed,
+      error: st.lastError || '',
+    });
+  }
+  return st;
+}
+
+function autoR2Backup(deps, company) {
+  if (!deps.store.r2Config(company.id)?.auto || !r2Configured(deps.store, company.id)) return;
+  runR2Backup(deps, company)
+    .then((st) => deps.cl?.log(`R2 auto-backup ${company.name}: ${st.uploaded} wysłanych, ${st.failed} błędów`))
+    .catch((err) => deps.cl?.log('R2 auto-backup failed:', err));
+}
 
 // Pull the rendered PDF of a Fakturownia document into the file archive
 // and register it against the invoice — the permanent copy, not a one-off
@@ -232,6 +285,8 @@ export async function syncCompany(deps, company) {
       lastSync: new Date().toISOString(),
       lastError: '',
     });
+    // Fire-and-forget: the sync result must not wait on bucket uploads
+    autoR2Backup(deps, company);
     return { ...result, fetched: records.length };
   } catch (err) {
     await store.setSyncState(company.id, { lastError: String(err?.message || err) })
@@ -333,6 +388,54 @@ export async function downloadXml({ http }, company, ksefNumber) {
 // tool). In dual mode the expense goes to Fakturownia first — its id lands
 // on the record — and a Fakturownia failure never blocks the local record;
 // the caller shows it as a warning instead.
+// Older file records (imported before seller extraction existed) lack the
+// seller fields, so every invoice-creation path re-reads the stored PDF
+// and fills in what is missing — one extractor, no matter how the file got
+// in or how the invoice is being made
+export async function ensureFileExtraction(deps, company, rec) {
+  const { store, cl } = deps;
+  if (rec.sellerName && (rec.nip || rec.vatId || rec.sellerAddress1)) return rec;
+  try {
+    const res = await fetch(cl.dataFileUrl(rec.key));
+    if (!res.ok) throw new Error(`stored file fetch: ${res.status}`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let b64 = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      b64 += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    const fields = extractFields(await cl.pdfText(btoa(b64)), company.nip);
+    const patch = {};
+    const fill = (key, value) => {
+      if (!rec[key] && value) patch[key] = value;
+    };
+    fill('nip', fields.nips[0]);
+    fill('vatId', fields.vatIds?.[0]);
+    fill('sellerName', fields.seller?.name);
+    fill('sellerAddress1', fields.seller?.address1);
+    fill('sellerAddress2', fields.seller?.address2);
+    fill('number', fields.numbers[0]);
+    fill('docDate', fields.dates[0]);
+    fill('gross', fields.amounts.strong[0]);
+    fill('currency', fields.currency);
+    if (rec.vatRate == null && fields.vatRate != null) patch.vatRate = fields.vatRate;
+    if (Object.keys(patch).length) {
+      return await store.updateFileRec(company.id, rec.id, patch);
+    }
+  } catch (err) {
+    cl.log('ensureFileExtraction: re-extraction failed (scan?):', err);
+  }
+  return rec;
+}
+
+// An expense document sent without a matching client makes Fakturownia
+// invent a new one from the buyer name — dig up the existing client first
+function fvClientFor(store, company, data) {
+  const tax = normalizeNip(data.sellerNip || data.sellerVatId);
+  const name = String(data.sellerName || '').trim().toLowerCase();
+  return store.fvClients(company.id).find((c) =>
+    (tax && c.nip === tax) || (name && c.name.trim().toLowerCase() === name)) || null;
+}
+
 export async function createCostFromFile(deps, company, data) {
   assertDate(data.issueDate, 'issueDate');
   const gross = Number(data.gross) || 0;
@@ -363,7 +466,10 @@ export async function createCostFromFile(deps, company, data) {
   let fvError = '';
   if (fakturowniaMode(company) === 'dual') {
     try {
-      fv = await createCostInFakturownia(deps, company, { ...data, gross, sellerNip: record.sellerNip });
+      const client = fvClientFor(deps.store, company, data);
+      fv = await createCostInFakturownia(deps, company, {
+        ...data, gross, sellerNip: record.sellerNip, ...(client ? { clientId: client.fvId } : {}),
+      });
       record.fvId = fv.id;
       if (!record.number && fv.number) record.number = fv.number;
     } catch (err) {

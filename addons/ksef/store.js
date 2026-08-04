@@ -62,8 +62,8 @@ export function createStore(cl) {
   async function deleteCompany(id) {
     for (const key of Object.keys(cache)) {
       if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`) || key.startsWith(`bank:${id}:`)
-        || key.startsWith(`files:${id}`)
-        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}` || key === `fvsync:${id}` || key === `stmts:${id}`) {
+        || key.startsWith(`files:${id}`) || key.startsWith(`stmts:${id}`) || key.startsWith(`r2m:${id}`)
+        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}` || key === `fvsync:${id}` || key === `r2cfg:${id}`) {
         await drop(key);
       }
     }
@@ -421,6 +421,33 @@ export function createStore(cl) {
     return true;
   }
 
+  // ---- R2 backup (one bucket per company, mirroring the blob-store keys
+  // in that company's registries; config {endpoint, bucket, accessKeyId,
+  // secretAccessKey, prefix, auto, last: {at, checked, uploaded, failed,
+  // error}}; manifest entries {key, etag, size} — presence of a blob-store
+  // key = backed up) ----
+
+  function r2Config(companyId) {
+    return cache[`r2cfg:${companyId}`] || null;
+  }
+
+  async function saveR2Config(companyId, cfg) {
+    await put(`r2cfg:${companyId}`, cfg);
+  }
+
+  function r2Manifest(companyId) {
+    return partsOf(`r2m:${companyId}`).flatMap((k) => cache[k] || []);
+  }
+
+  function r2Index(companyId) {
+    return new Map(r2Manifest(companyId).map((e) => [e.key, e]));
+  }
+
+  async function saveR2Manifest(companyId, entries, last) {
+    await writeParts(`r2m:${companyId}`, entries);
+    await saveR2Config(companyId, { ...(r2Config(companyId) || {}), last });
+  }
+
   function fvSyncState(companyId) {
     return cache[`fvsync:${companyId}`] || null;
   }
@@ -470,5 +497,10 @@ export function createStore(cl) {
     setFvSyncState,
     stmtFiles,
     addStmtFile,
+    r2Config,
+    saveR2Config,
+    r2Manifest,
+    r2Index,
+    saveR2Manifest,
   };
 }

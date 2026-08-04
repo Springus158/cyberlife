@@ -8,10 +8,13 @@ import {
   renderTodayWidget, renderUnpaidWidget, renderSettings,
   activeCompany, setActiveCompany,
 } from './page.js';
-import { renderBankPage, bankOnKey } from './bank-page.js';
+import { renderBankPage, bankOnKey, linkRefund, unlinkRefund } from './bank-page.js';
 import { renderFilesPage, filesOnKey } from './files-page.js';
 import { renderFvPage, fvOnKey } from './fv-page.js';
-import { syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid, backfillFvSalePdfs, archiveStatementOriginal } from './service.js';
+import {
+  syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid, backfillFvSalePdfs,
+  archiveStatementOriginal, runR2Backup, r2Configured, ensureFileExtraction,
+} from './service.js';
 import { importFromFakturownia, fakturowniaMode, fvUpdateClientBankAccount } from './fakturownia.js';
 import { parseStatement, matchTransactions, categorize } from './bank.js';
 import { extractFields, matchFileToInvoice } from './files.js';
@@ -249,6 +252,7 @@ export default async function activate(cl) {
   // Pliki pages do by hand) ----
 
   const txStateOf = (t) => {
+    if (t.refundTxId) return 'ret';
     if (t.amount > 0) return 'in';
     if (t.invoiceId) return 'ok';
     return (t.category || categorize(t)) ? 'warn' : 'bad';
@@ -266,6 +270,7 @@ export default async function activate(cl) {
     invoiceId: t.invoiceId || '',
     matchedBy: t.matchedBy || '',
     category: t.category || '',
+    ...(t.refundTxId ? { refundTxId: t.refundTxId, refundNote: t.refundNote || '' } : {}),
   });
 
   cl.registerAgentTool('list_bank_transactions', async (args) => {
@@ -294,7 +299,26 @@ export default async function activate(cl) {
       const i = list.findIndex((t) => t.id === args.txId);
       if (i < 0) continue;
       const tx = { ...list[i] };
+      if (args.refundTxId) {
+        const all = store.bankMonths(company.id).flatMap((m) => store.bankMonth(company.id, m));
+        const other = all.find((t) => t.id === args.refundTxId);
+        if (!other) throw new Error(`transaction ${args.refundTxId} not found`);
+        if (Math.sign(other.amount) !== -Math.sign(tx.amount)
+          || Math.abs(Math.abs(other.amount) - Math.abs(tx.amount)) >= 0.015) {
+          throw new Error(`refund pair mismatch: ${tx.amount} vs ${other.amount} — amounts must be equal and opposite`);
+        }
+        const charge = tx.amount < 0 ? tx : other;
+        const refund = tx.amount < 0 ? other : tx;
+        await linkRefund(store, company, charge, refund);
+        if (bankEl) renderBankPage(bankEl, deps);
+        return { linked: true, charge: charge.id, refund: refund.id };
+      }
       if (args.unassign) {
+        if (tx.refundTxId) {
+          await unlinkRefund(store, company, tx);
+          if (bankEl) renderBankPage(bankEl, deps);
+          return { transaction: slimTx({ ...tx, refundTxId: '', refundNote: '' }) };
+        }
         tx.invoiceId = '';
         tx.matchedBy = '';
         tx.auto = false;
@@ -515,7 +539,7 @@ export default async function activate(cl) {
 
   cl.registerAgentTool('attach_file', async (args) => {
     const company = resolveCompany(args.company);
-    const rec = store.files(company.id).find((f) => f.id === args.fileId);
+    let rec = store.files(company.id).find((f) => f.id === args.fileId);
     if (!rec) throw new Error(`file ${args.fileId} not found`);
     if (args.invoiceId) {
       const inv = store.getInvoice(args.invoiceId);
@@ -528,6 +552,7 @@ export default async function activate(cl) {
     }
     if (args.createInvoice) {
       const c = args.createInvoice;
+      rec = await ensureFileExtraction(deps, company, rec);
       const { record, fv, fvError } = await createCostFromFile(deps, company, {
         fileId: rec.id,
         number: c.number || rec.number || '',
@@ -562,6 +587,33 @@ export default async function activate(cl) {
     const result = await backfillFvSalePdfs(deps, company, { limit: args.limit || 30 });
     if (filesEl) renderFilesPage(filesEl, deps);
     return result;
+  });
+
+  cl.registerAgentTool('backup_r2', async (args) => {
+    const company = resolveCompany(args.company);
+    if (args.action === 'status') {
+      const cfg = store.r2Config(company.id);
+      return {
+        company: company.name,
+        configured: r2Configured(store, company.id),
+        auto: !!cfg?.auto,
+        bucket: cfg?.bucket || '',
+        last: cfg?.last || null,
+        objectsInManifest: store.r2Manifest(company.id).length,
+      };
+    }
+    const st = await runR2Backup(deps, company);
+    if (filesEl) renderFilesPage(filesEl, deps);
+    return {
+      company: company.name,
+      checked: st.checked,
+      uploaded: st.uploaded,
+      skipped: st.skipped,
+      failed: st.failed,
+      sentBytes: st.sentBytes,
+      lastError: st.lastError || '',
+      objectsInManifest: store.r2Manifest(company.id).length,
+    };
   });
 
   cl.registerAgentTool('import_fakturownia', async (args) => {

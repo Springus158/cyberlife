@@ -8,13 +8,16 @@ import { setPaid, archiveStatementOriginal } from './service.js';
 import { fakturowniaMode, createDwInFakturownia } from './fakturownia.js';
 import {
   injectStyle, currentMonth, monthAdd, monthLabel, periodBarHtml, bindPeriodBar, periodOf, printDocHtml, invDesc,
-  activeCompany,
+  activeCompany, openPdfOverlay,
 } from './page.js';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const money = (n, cur = 'PLN') => `${(Number(n) || 0).toFixed(2)} ${cur}`;
 
-const CATEGORIES = ['opłata bankowa', 'podatek / ZUS', 'przewalutowanie', 'wynagrodzenie', 'odsetki', 'karta / prywatne', 'inne'];
+// NKUP: an expense with no invoice at all — the accountant books it as
+// "other costs" WITHOUT any tax deduction, so the report must say so
+export const NKUP_CATEGORY = 'NKUP — bez odliczenia';
+const CATEGORIES = ['opłata bankowa', 'podatek / ZUS', 'przewalutowanie', 'wynagrodzenie', 'odsetki', 'karta / prywatne', NKUP_CATEGORY, 'inne'];
 
 const bankView = {
   query: '',
@@ -25,15 +28,43 @@ const bankView = {
   busy: '',
   error: '',
   info: '',
-  show: { ok: true, warn: true, bad: true, in: true },
+  show: { ok: true, warn: true, bad: true, in: true, ret: true },
 };
 
 // Incoming operations (uznania) are their own visual bucket; the
 // settlement column still shows whether they were paired with a sale
 function txState(tx) {
+  if (tx.refundTxId) return 'ret';
   if (tx.amount > 0) return 'in';
   if (tx.invoiceId) return 'ok';
   return (tx.category || categorize(tx)) ? 'warn' : 'bad';
+}
+
+// A cancelled charge and its incoming refund cancel each other out — link
+// them both ways so neither side looks like an open item
+export async function linkRefund(store, company, charge, refund) {
+  const note = (t) => `${t.date} (${t.amount > 0 ? '+' : ''}${t.amount.toFixed(2)} ${t.currency})`;
+  await patchTx(store, company, charge, {
+    refundTxId: refund.id, refundNote: `zwrot ${note(refund)}`, category: '', invoiceId: '', matchedBy: '', auto: false,
+  });
+  await patchTx(store, company, refund, {
+    refundTxId: charge.id, refundNote: `anulowane obciążenie ${note(charge)}`, category: '', invoiceId: '', matchedBy: '', auto: false,
+  });
+}
+
+export async function unlinkRefund(store, company, tx) {
+  const other = txById(store, company, tx.refundTxId);
+  await patchTx(store, company, tx, { refundTxId: '', refundNote: '' });
+  if (other) await patchTx(store, company, other, { refundTxId: '', refundNote: '' });
+}
+
+function txById(store, company, id) {
+  if (!id) return null;
+  for (const m of store.bankMonths(company.id)) {
+    const hit = store.bankMonth(company.id, m).find((t) => t.id === id);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 // Transactions live in buckets keyed by their OWN operation month — the
@@ -121,6 +152,8 @@ export function renderBankPage(el, deps) {
   ].some((v) => String(v || '').toLowerCase().includes(q));
   const acctIndex = company ? buildAccountIndex(store.clientAccounts(company.id)) : new Map();
   const txClient = (t) => acctIndex.get(counterAccount(t.desc))?.name || '';
+  const txFileMap = company ? store.fileByInvoice(company.id) : new Map();
+  const invIndex = company ? new Map(store.listInvoices({ companyId: company.id }).map((i) => [i.id, i])) : new Map();
   const shown = txs.filter((t) => bankView.show[txState(t)] && matchesQuery(t));
   // No paging on purpose (desktop app, a few thousand rows render fine) —
   // the cap only guards against an unbounded future archive
@@ -134,9 +167,9 @@ export function renderBankPage(el, deps) {
     if (!byAccount.has(key)) byAccount.set(key, []);
     byAccount.get(key).push(tx);
   }
-  const counts = { ok: 0, warn: 0, bad: 0, in: 0 };
+  const counts = { ok: 0, warn: 0, bad: 0, in: 0, ret: 0 };
   for (const t of txs) counts[txState(t)]++;
-  const { ok: matched, warn: categorized, bad: open, in: incoming } = counts;
+  const { ok: matched, warn: categorized, bad: open, in: incoming, ret: refunded } = counts;
   const months = company ? store.bankMonths(company.id) : [];
 
   el.innerHTML = `
@@ -167,6 +200,7 @@ export function renderBankPage(el, deps) {
           <label style="color:var(--warning, #f9e2af)"><input type="checkbox" data-show="warn" ${bankView.show.warn ? 'checked' : ''}> opłaty / kategorie (${categorized})</label>
           <label style="color:var(--error, #f38ba8)"><input type="checkbox" data-show="bad" ${bankView.show.bad ? 'checked' : ''}> nieprzypisane (${open})</label>
           <label style="color:#94e2d5"><input type="checkbox" data-show="in" ${bankView.show.in ? 'checked' : ''}> uznania (${incoming})</label>
+          <label style="color:#b4befe"><input type="checkbox" data-show="ret" ${bankView.show.ret ? 'checked' : ''}> zwroty / anulowane (${refunded})</label>
         </div>` : ''}
       <div class="ksefad-scroll">
         ${[...byAccount.entries()].map(([key, list]) => {
@@ -174,7 +208,7 @@ export function renderBankPage(el, deps) {
           return `
           <h3 style="margin:14px 0 6px">${esc(list[0].bank || 'Bank')} · ${esc(fmtAccount(account))} <span class="ksefad-muted">(${esc(currency)})</span></h3>
           <table class="ksefad-table">
-            <thead><tr><th>Data</th><th>Typ</th><th>Opis</th><th style="text-align:right">Kwota</th><th>Klient</th><th>Faktura / kategoria</th></tr></thead>
+            <thead><tr><th>Data</th><th>Typ</th><th>Opis</th><th style="text-align:right">Kwota</th><th>Klient</th><th>Faktura / kategoria</th><th>Plik</th><th title="faktura przyszła z KSeF — plik PDF nie istnieje, bo dokument jest elektroniczny">KSeF</th></tr></thead>
             <tbody>
               ${list.map((tx) => `
                 <tr data-tx="${esc(tx.id)}" class="ksefad-row-${txState(tx)}">
@@ -184,16 +218,30 @@ export function renderBankPage(el, deps) {
                   <td style="text-align:right; white-space:nowrap; color:${tx.amount < 0 ? 'var(--error, #f38ba8)' : 'var(--success, #a6e3a1)'}">${money(tx.amount, currency)}</td>
                   <td style="white-space:nowrap">${txClient(tx) ? `👤 ${esc(txClient(tx))}` : '<span class="ksefad-muted">—</span>'}</td>
                   <td>
-                    ${tx.invoiceId
-                      ? `<span class="ksefad-ok">✓</span> ${esc(invoiceLabel(store, tx.invoiceId))}
-                         <span class="ksefad-muted">(${esc(tx.matchedBy || 'ręcznie')})</span>
-                         <button class="ksefad-btn" data-unassign="${esc(tx.id)}" title="Odepnij">×</button>`
-                      : `<button class="ksefad-btn" data-assign="${esc(tx.id)}">Przypisz fakturę</button>
-                         <select data-category="${esc(tx.id)}">
-                           <option value="">— kategoria —</option>
-                           ${CATEGORIES.map((c) => `<option ${tx.category === c ? 'selected' : ''}>${c}</option>`).join('')}
-                         </select>`}
+                    ${tx.refundTxId
+                      ? `<span style="color:#b4befe">↩ ${tx.amount < 0 ? 'anulowane' : 'zwrot'}</span>
+                         <span class="ksefad-muted">${esc(tx.refundNote || '')}</span>
+                         <button class="ksefad-btn" data-unlink-ret="${esc(tx.id)}" title="Rozłącz parę zwrotu">×</button>`
+                      : tx.invoiceId
+                        ? `<span class="ksefad-ok">✓</span> ${esc(invoiceLabel(store, tx.invoiceId))}
+                           <span class="ksefad-muted">(${esc(tx.matchedBy || 'ręcznie')})</span>
+                           <button class="ksefad-btn" data-unassign="${esc(tx.id)}" title="Odepnij">×</button>`
+                        : `<button class="ksefad-btn" data-assign="${esc(tx.id)}">Przypisz fakturę</button>
+                           <select data-category="${esc(tx.id)}">
+                             <option value="">— kategoria —</option>
+                             ${CATEGORIES.map((c) => `<option ${tx.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+                           </select>`}
                   </td>
+                  <td style="text-align:center">${tx.invoiceId && txFileMap.has(tx.invoiceId)
+                    ? `<button class="ksefad-btn" data-txfile="${esc(tx.invoiceId)}" title="podgląd pliku faktury">📄</button>`
+                    : '<span class="ksefad-muted">—</span>'}</td>
+                  <td style="text-align:center">${(() => {
+                    const inv = tx.invoiceId ? invIndex.get(tx.invoiceId) : null;
+                    if (!inv) return '<span class="ksefad-muted">—</span>';
+                    return inv.ksefNumber
+                      ? `<span class="ksefad-ok" title="${esc(inv.ksefNumber)}">✓</span>`
+                      : '<span class="ksefad-muted">—</span>';
+                  })()}</td>
                 </tr>`).join('')}
             </tbody>
           </table>`;
@@ -282,6 +330,19 @@ export function renderBankPage(el, deps) {
   });
   el.querySelectorAll('[data-assign]').forEach((btn) => {
     btn.onclick = () => openAssignModal(el, deps, company, txs.find((t) => t.id === btn.dataset.assign));
+  });
+  el.querySelectorAll('[data-unlink-ret]').forEach((btn) => {
+    btn.onclick = async () => {
+      const tx = txs.find((t) => t.id === btn.dataset.unlinkRet);
+      if (tx) await unlinkRefund(store, company, tx);
+      rerender();
+    };
+  });
+  el.querySelectorAll('[data-txfile]').forEach((btn) => {
+    btn.onclick = () => {
+      const rec = txFileMap.get(btn.dataset.txfile);
+      if (rec) openPdfOverlay(deps, rec);
+    };
   });
   el.querySelectorAll('[data-unassign]').forEach((btn) => {
     btn.onclick = async () => {
@@ -555,19 +616,25 @@ function openTxDetail(el, deps, company, tx) {
         <div><b>Identyfikator operacji:</b> ${esc(tx.id)}</div>
         <div><b>Pełny opis:</b></div>
         <div style="white-space:pre-wrap; background:var(--bg-surface, #313244); border-radius:8px; padding:10px 12px">${esc(tx.desc)}</div>
+        ${tx.refundTxId ? `
+          <div style="margin-top:6px"><b>Para zwrotu:</b> <span style="color:#b4befe">↩ ${tx.amount < 0 ? 'anulowane' : 'zwrot'}</span>
+            <span class="adk-muted">${esc(tx.refundNote || '')}</span></div>` : ''}
         ${inv ? `
           <div style="margin-top:6px"><b>Przypisana faktura:</b> ${esc(inv.number || inv.ksefNumber)}
             <span class="adk-muted">(${esc(tx.matchedBy || 'ręcznie')})</span></div>
           <div class="adk-muted">${esc(inv.dir === 'cost' ? inv.sellerName : inv.buyerName)} · ${money(inv.gross, inv.currency)}
             · ${inv.paid ? 'opłacona' : 'nieopłacona'}${inv.ksefNumber ? ` · KSeF ${esc(inv.ksefNumber)}` : ''}</div>
           ${inv.lines?.length ? `<div class="adk-muted">${esc(invDesc(inv, 90))}</div>` : ''}`
+        : tx.refundTxId ? ''
         : `<div style="margin-top:6px"><b>Faktura:</b> <span class="ksefad-no">brak przypisania</span>
             ${tx.category ? `· kategoria: <b>${esc(tx.category)}</b>` : ''}</div>`}
       </div>
       <div class="adk-actions">
         ${inv && /do weryfikacji/.test(tx.matchedBy || '') ? '<button class="adk-btn primary" id="txVerify">✓ Zweryfikuj przypisanie</button>' : ''}
+        ${tx.refundTxId ? '<button class="adk-btn" id="txUnlinkRet">Rozłącz parę zwrotu</button>' : ''}
         ${inv ? `<button class="adk-btn" id="txUnassign">Odepnij fakturę</button>`
-          : `<button class="adk-btn primary" id="txAssign">Przypisz fakturę</button>`}
+          : tx.refundTxId ? '' : `<button class="adk-btn primary" id="txAssign">Przypisz fakturę</button>`}
+        ${!inv && !tx.refundTxId ? '<button class="adk-btn" id="txLinkRet">↩ Powiąż ze zwrotem</button>' : ''}
         ${!inv && tx.amount < 0 && fakturowniaMode(company) === 'dual' ? '<button class="adk-btn" id="txMakeDw">Utwórz DW w Fakturowni…</button>' : ''}
         <span style="flex:1"></span>
         <button class="adk-btn" id="txClose">Zamknij (Esc)</button>
@@ -599,6 +666,65 @@ function openTxDetail(el, deps, company, tx) {
     close();
     renderBankPage(el, deps);
   });
+  overlay.querySelector('#txUnlinkRet')?.addEventListener('click', async () => {
+    await unlinkRefund(store, company, tx);
+    close();
+    renderBankPage(el, deps);
+  });
+  overlay.querySelector('#txLinkRet')?.addEventListener('click', () => {
+    close();
+    openLinkRefundModal(el, deps, company, tx);
+  });
+}
+
+// Candidates for the other half of a refund pair: opposite sign, same
+// absolute amount, within 90 days, not spoken for yet
+function openLinkRefundModal(el, deps, company, tx) {
+  const { store } = deps;
+  const anchor = Date.parse(tx.date);
+  const candidates = store.bankMonths(company.id)
+    .flatMap((m) => store.bankMonth(company.id, m))
+    .filter((t) => t.id !== tx.id
+      && Math.sign(t.amount) === -Math.sign(tx.amount)
+      && Math.abs(Math.abs(t.amount) - Math.abs(tx.amount)) < 0.015
+      && !t.refundTxId && !t.invoiceId
+      && Math.abs(Date.parse(t.date) - anchor) <= 90 * 86400e3)
+    .sort((a, b) => Math.abs(Date.parse(a.date) - anchor) - Math.abs(Date.parse(b.date) - anchor));
+  const overlay = document.createElement('div');
+  overlay.className = 'ksefad-overlay modal-overlay';
+  overlay.innerHTML = `
+    <div class="ksefad-modal lg" style="width:min(760px, 92vw)">
+      <h2 style="margin-bottom:6px">↩ Powiąż ze zwrotem</h2>
+      <div class="ksefad-muted" style="margin-bottom:12px">${esc(tx.date)} · ${money(tx.amount, tx.currency)} · ${esc(tx.desc.slice(0, 90))}</div>
+      ${candidates.length ? `
+        <table class="ksefad-table">
+          <thead><tr><th>Data</th><th>Kwota</th><th>Opis</th></tr></thead>
+          <tbody>
+            ${candidates.map((t) => `
+              <tr data-pick-ret="${esc(t.id)}" style="cursor:pointer">
+                <td style="white-space:nowrap">${esc(t.date)}</td>
+                <td style="white-space:nowrap">${money(t.amount, t.currency)}</td>
+                <td>${esc(t.desc.slice(0, 80))}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>`
+    : '<p class="ksefad-muted">Brak operacji o przeciwnej kwocie w ±90 dni.</p>'}
+      <div class="adk-actions"><span style="flex:1"></span><button class="adk-btn" id="lrCancel">Anuluj</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('#lrCancel').onclick = close;
+  overlay.querySelectorAll('[data-pick-ret]').forEach((row) => {
+    row.onclick = async () => {
+      const other = candidates.find((t) => t.id === row.dataset.pickRet);
+      const charge = tx.amount < 0 ? tx : other;
+      const refund = tx.amount < 0 ? other : tx;
+      await linkRefund(store, company, charge, refund);
+      close();
+      renderBankPage(el, deps);
+    };
+  });
 }
 
 // The accountant report mirrors the source statement 1:1 — same order,
@@ -608,6 +734,22 @@ function openTxDetail(el, deps, company, tx) {
 const plMoney = (n) => (Number(n) || 0).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function txStatus(store, tx) {
+  if (tx.refundTxId) {
+    return {
+      color: '#e2e5f7',
+      label: tx.amount < 0
+        ? `<b>ANULOWANE</b><br><span style="color:#555">${esc(tx.refundNote || 'zwrócone')}</span>`
+        : `<b>ZWROT</b><br><span style="color:#555">${esc(tx.refundNote || 'za anulowane obciążenie')}</span>`,
+      ksef: '',
+    };
+  }
+  if (tx.category === NKUP_CATEGORY) {
+    return {
+      color: '#fde8d7',
+      label: '<b>KOSZT BEZ FAKTURY — NKUP</b><br><span style="color:#555">zaksięgować w koszty inne, bez odliczenia podatku (faktura nie istnieje)</span>',
+      ksef: '',
+    };
+  }
   if (tx.invoiceId) {
     const inv = store.getInvoice(tx.invoiceId);
     return {
@@ -615,11 +757,12 @@ function txStatus(store, tx) {
       label: `<b>${esc(inv?.number || inv?.ksefNumber || tx.invoiceId)}</b>`
         + `${inv ? `<br>${esc(inv.dir === 'cost' ? inv.sellerName : inv.buyerName)}` : ''}`
         + `<br><span style="color:#555">${esc(tx.matchedBy || 'przypisano ręcznie')}</span>`,
+      ksef: inv?.ksefNumber || '',
     };
   }
   const category = tx.category || categorize(tx);
-  if (category) return { color: '#fbf3d2', label: `${esc(category)}<br><span style="color:#555">bez faktury</span>` };
-  return { color: '#f8dcdc', label: '<b>DO WYJAŚNIENIA</b>' };
+  if (category) return { color: '#fbf3d2', label: `${esc(category)}<br><span style="color:#555">bez faktury</span>`, ksef: '' };
+  return { color: '#f8dcdc', label: '<b>DO WYJAŚNIENIA</b>', ksef: '' };
 }
 
 function ipkoReportSection(store, company, account, currency, list) {
@@ -646,7 +789,7 @@ function ipkoReportSection(store, company, account, currency, list) {
       </tr></table>
       <table style="width:100%; border-collapse:collapse; font-size:10.5px">
         <thead><tr>
-          ${['Data operacji<br>Data waluty', 'Identyfikator operacji<br>Opis operacji', 'TYP OPERACJI', 'Kwota operacji', 'Saldo', 'Rozliczenie']
+          ${['Data operacji<br>Data waluty', 'Identyfikator operacji<br>Opis operacji', 'TYP OPERACJI', 'Kwota operacji', 'Saldo', 'Rozliczenie', 'KSeF']
             .map((h) => `<th style="${cell} background:#e8e8e8; text-align:left">${h}</th>`).join('')}
         </tr></thead>
         <tbody>
@@ -660,6 +803,9 @@ function ipkoReportSection(store, company, account, currency, list) {
               <td style="${cell} border-bottom:none; text-align:right; white-space:nowrap"><b>${plMoney(t.amount)}</b></td>
               <td style="${cell} border-bottom:none; text-align:right; white-space:nowrap">${typeof t.saldo === 'number' ? plMoney(t.saldo) : ''}</td>
               <td style="${cell}" rowspan="2">${st.label}</td>
+              <td style="${cell} text-align:center" rowspan="2">${st.ksef
+                ? `✓<br><span style="font-size:8px; color:#555; word-break:break-all">${esc(st.ksef)}</span>`
+                : '<span style="color:#999">—</span>'}</td>
             </tr>
             <tr style="background:${st.color}">
               <td style="${cell} border-top:none; white-space:nowrap">${esc(t.valueDate || '')}</td>
@@ -699,10 +845,12 @@ async function printReport(deps, company, month, txs, mode = 'local') {
     byAccount.get(key).push(tx);
   }
   const counts = {
-    ok: txs.filter((t) => t.invoiceId).length,
-    warn: txs.filter((t) => !t.invoiceId && (t.category || categorize(t))).length,
+    ret: txs.filter((t) => t.refundTxId).length,
+    nkup: txs.filter((t) => !t.refundTxId && t.category === NKUP_CATEGORY).length,
+    ok: txs.filter((t) => !t.refundTxId && t.invoiceId).length,
+    warn: txs.filter((t) => !t.refundTxId && !t.invoiceId && t.category !== NKUP_CATEGORY && (t.category || categorize(t))).length,
   };
-  counts.bad = txs.length - counts.ok - counts.warn;
+  counts.bad = txs.length - counts.ok - counts.warn - counts.ret - counts.nkup;
 
   // Second deliverable: the non-KSeF invoices of the period merged into
   // one PDF from the file archive (Fakturownia PDFs land there during
@@ -767,8 +915,13 @@ async function printReport(deps, company, month, txs, mode = 'local') {
       <div style="margin-bottom:4px">
         ${legend('#e3f1e3', `przypisane do faktury (${counts.ok})`)}
         ${legend('#fbf3d2', `bez faktury — opłaty/podatki (${counts.warn})`)}
+        ${counts.ret ? legend('#e2e5f7', `anulowane / zwroty (${counts.ret})`) : ''}
+        ${counts.nkup ? legend('#fde8d7', `bez faktury — NKUP (${counts.nkup})`) : ''}
         ${legend('#f8dcdc', `do wyjaśnienia (${counts.bad})`)}
       </div>
+      ${counts.ret ? '<div style="color:#555; margin-bottom:4px">Pozycje <b>ANULOWANE / ZWROT</b> to pary operacji, które się wzajemnie znoszą (anulowana płatność i jej zwrot) — nie ma do nich faktur i nie wymagają księgowania.</div>' : ''}
+      ${counts.nkup ? '<div style="color:#555; margin-bottom:4px">Pozycje <b>KOSZT BEZ FAKTURY — NKUP</b>: faktura nie istnieje i nie będzie — proszę zaksięgować w koszty inne, bez odliczenia podatku.</div>' : ''}
+      <div style="color:#555; margin-bottom:4px">Kolumna <b>KSeF</b>: ✓ = faktura jest w KSeF (z podanym numerem) — dokument pobierze się automatycznie, nie trzeba go szukać ani weryfikować ręcznie.</div>
       ${[...byAccount.entries()].map(([key, list]) => {
         const [account, currency] = key.split('|');
         const template = REPORT_TEMPLATES[list[0]?.bank] || ipkoReportSection;
