@@ -338,6 +338,8 @@ export function SetProjectJira(arg1:string,arg2:string,arg3:string):Promise<void
 
 export function SetProjectWidgets(arg1:string,arg2:Array<string>):Promise<void>;
 
+export function SetTermViewSize(arg1:number,arg2:number):Promise<void>;
+
 export function SetTerminalAccount(arg1:string,arg2:string):Promise<void>;
 
 export function SetTerminalFontSize(arg1:number):Promise<void>;

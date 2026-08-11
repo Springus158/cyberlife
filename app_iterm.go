@@ -267,3 +267,12 @@ func (a *App) UnwatchITermSession() {
 	}
 	a.itermController.StopStyledContentWatching()
 }
+
+// SetTermViewSize reports how many character cells fit in the dashboard's
+// output viewer so the watched tmux window is resized to match.
+func (a *App) SetTermViewSize(cols, rows int) {
+	if a.itermController == nil {
+		return
+	}
+	a.itermController.SetViewSize(cols, rows)
+}

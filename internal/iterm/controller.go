@@ -52,6 +52,8 @@ type Controller struct {
 	tmuxPollStop      chan struct{}
 	tmuxPollHash      string
 	tmuxControl       *tmuxControlWatcher
+	tmuxViewCols      int
+	tmuxViewRows      int
 }
 
 // NewController creates a new iTerm2 controller

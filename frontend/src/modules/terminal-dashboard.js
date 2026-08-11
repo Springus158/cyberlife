@@ -10,7 +10,7 @@ import { loadClaudeAccounts, buildAccountOptions, attachAccountSelect } from './
 import { buildGroupOptions, toggleGroupCollapsed, deleteGroup, openGroupModal } from './project-groups.js';
 import { refreshGitStatus } from './git.js';
 import { renderTabbedIconPicker } from './icon-catalog.js';
-import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, SaveScreenshot, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies } from '../../wailsjs/go/main/App';
+import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, SaveScreenshot, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies, SetTermViewSize } from '../../wailsjs/go/main/App';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { getMode, setMode } from './shell.js';
 import { toggleTermMenu } from './term-menu.js';
@@ -2127,12 +2127,8 @@ function updateStyledOutputViewer() {
     const hist = document.createDocumentFragment();
     if (dashboardState.historyLines && dashboardState.historyLines.length > 0) {
       for (const histLineRuns of dashboardState.historyLines) {
-        hist.appendChild(renderStyledLine(histLineRuns, 'term-line term-history-line'));
+        hist.appendChild(renderStyledLine(histLineRuns, 'term-line'));
       }
-      const sep = document.createElement('div');
-      sep.className = 'term-history-separator';
-      sep.textContent = '── live ──';
-      hist.appendChild(sep);
     }
     histBox.innerHTML = '';
     histBox.appendChild(hist);
@@ -2218,6 +2214,37 @@ function applyFontSize() {
   const viewer = document.getElementById('itermOutputViewer');
   if (!viewer) return;
   viewer.style.fontSize = dashboardState.fontSize + 'px';
+  syncTermViewSize();
+}
+
+let lastSentViewSize = null;
+let viewSizeTimer = null;
+
+function syncTermViewSize() {
+  if (viewSizeTimer) clearTimeout(viewSizeTimer);
+  viewSizeTimer = setTimeout(sendTermViewSize, 200);
+}
+
+function sendTermViewSize() {
+  const viewer = document.getElementById('itermOutputViewer');
+  if (!viewer || !dashboardState.viewingSessionId) return;
+  if (!viewer.clientWidth || !viewer.clientHeight) return;
+  const cs = getComputedStyle(viewer);
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
+  probe.textContent = 'M'.repeat(100);
+  viewer.appendChild(probe);
+  const charW = probe.getBoundingClientRect().width / 100;
+  probe.remove();
+  const lineH = parseFloat(cs.lineHeight) || dashboardState.fontSize * 1.35;
+  if (!charW || !lineH) return;
+  const innerW = viewer.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const innerH = viewer.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const cols = Math.min(400, Math.max(40, Math.floor(innerW / charW)));
+  const rows = Math.min(200, Math.max(10, Math.floor(innerH / lineH)));
+  if (lastSentViewSize && lastSentViewSize.cols === cols && lastSentViewSize.rows === rows) return;
+  lastSentViewSize = { cols, rows };
+  SetTermViewSize(cols, rows).catch(err => console.warn('term view size sync failed:', err));
 }
 
 function applyProfileColors() {
@@ -2503,6 +2530,11 @@ export function renderTerminalDashboard() {
         mouseDownPos = null;
       });
       viewer._focusHandlerAttached = true;
+    }
+
+    if (viewer && !viewer._viewSizeObserved) {
+      new ResizeObserver(() => syncTermViewSize()).observe(viewer);
+      viewer._viewSizeObserved = true;
     }
   }
 

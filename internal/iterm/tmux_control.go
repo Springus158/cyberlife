@@ -87,6 +87,38 @@ func (c *Controller) tmuxSendKeysFast(name, text string, pressEnter bool) bool {
 	return true
 }
 
+// SetViewSize records the dashboard viewer's character grid and, when our
+// control client is the only one attached, resizes tmux to it so lines wrap
+// at the visible width instead of the fixed 200-col default.
+func (c *Controller) SetViewSize(cols, rows int) {
+	cols = clampInt(cols, 40, 400)
+	rows = clampInt(rows, 10, 200)
+	c.tmuxMu.Lock()
+	changed := cols != c.tmuxViewCols || rows != c.tmuxViewRows
+	c.tmuxViewCols, c.tmuxViewRows = cols, rows
+	w := c.tmuxControl
+	c.tmuxMu.Unlock()
+	if !changed || w == nil {
+		return
+	}
+	if tty, _ := tmuxHostClient(); tty != "" {
+		return
+	}
+	if err := w.sendCommand(fmt.Sprintf("refresh-client -C %dx%d", cols, rows)); err != nil {
+		logging.Debug("tmux control refresh-client resize failed", "error", err)
+	}
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 func (c *Controller) startTmuxControlWatch(virtualID, name string, styledHandler func(*StyledContent)) error {
 	bin := findTmuxPath()
 	if bin == "" {
@@ -120,7 +152,13 @@ func (c *Controller) startTmuxControlWatch(virtualID, name string, styledHandler
 	// Windows keep their 80x24 default size unless some client dictates one;
 	// only do it when no real client is attached so we never fight iTerm.
 	if tty, _ := tmuxHostClient(); tty == "" {
-		if err := w.sendCommand(fmt.Sprintf("refresh-client -C %dx%d", tmuxControlCols, tmuxControlRows)); err != nil {
+		c.tmuxMu.Lock()
+		cols, rows := c.tmuxViewCols, c.tmuxViewRows
+		c.tmuxMu.Unlock()
+		if cols == 0 {
+			cols, rows = tmuxControlCols, tmuxControlRows
+		}
+		if err := w.sendCommand(fmt.Sprintf("refresh-client -C %dx%d", cols, rows)); err != nil {
 			logging.Debug("tmux control refresh-client failed", "error", err)
 		}
 	}

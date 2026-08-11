@@ -662,6 +662,10 @@ export function SetProjectWidgets(arg1, arg2) {
   return window['go']['main']['App']['SetProjectWidgets'](arg1, arg2);
 }
 
+export function SetTermViewSize(arg1, arg2) {
+  return window['go']['main']['App']['SetTermViewSize'](arg1, arg2);
+}
+
 export function SetTerminalAccount(arg1, arg2) {
   return window['go']['main']['App']['SetTerminalAccount'](arg1, arg2);
 }
