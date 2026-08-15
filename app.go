@@ -575,6 +575,12 @@ func (a *App) GetClaudeSessions() []claude.SessionInfo {
 	return claude.LiveSessions()
 }
 
+// KillClaudeSession terminates a live Claude Code session by pid (SIGTERM,
+// or SIGKILL with force). Refuses pids that are not live Claude sessions.
+func (a *App) KillClaudeSession(pid int, force bool) error {
+	return claude.KillSession(pid, force)
+}
+
 // GetTerminalTheme returns the current terminal theme name
 func (a *App) GetTerminalTheme() string {
 	if a.stateManager == nil {

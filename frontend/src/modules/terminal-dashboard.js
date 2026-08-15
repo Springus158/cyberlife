@@ -10,7 +10,7 @@ import { loadClaudeAccounts, buildAccountOptions, attachAccountSelect } from './
 import { buildGroupOptions, toggleGroupCollapsed, deleteGroup, openGroupModal } from './project-groups.js';
 import { refreshGitStatus } from './git.js';
 import { renderTabbedIconPicker } from './icon-catalog.js';
-import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, SaveScreenshot, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies, SetTermViewSize } from '../../wailsjs/go/main/App';
+import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, SaveScreenshot, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies, SetTermViewSize, GetClaudeSessions } from '../../wailsjs/go/main/App';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { getMode, setMode } from './shell.js';
 import { toggleTermMenu } from './term-menu.js';
@@ -165,12 +165,18 @@ function buildProjectGroups(allTabs) {
 
 // Worst-first: a session waiting for the user outranks one still working,
 // which outranks idle — the project dot shows what most needs attention
+// Heartbeat files are the authoritative source (~/.claude/sessions, matched
+// by working dir); the output-analysis detector only fills in when a tab has
+// no heartbeat — e.g. a claude started before the heartbeat feature.
 function aggregateClaudeStatus(tabs) {
-  const statuses = tabs.map(t => state.claudeStatus?.get?.(t.sessionId)).filter(Boolean);
-  if (statuses.includes('needs_action')) return 'needs_action';
-  if (statuses.includes('working')) return 'working';
-  if (statuses.includes('idle')) return 'idle';
-  return 'none';
+  const rank = { needs_action: 0, working: 1, idle: 2, none: 3 };
+  let best = 'none';
+  for (const t of tabs) {
+    const hb = claudeDotByCwd.get(t.path);
+    const s = hb === 'waiting' ? 'needs_action' : (hb || state.claudeStatus?.get?.(t.sessionId) || 'none');
+    if (rank[s] < rank[best]) best = s;
+  }
+  return best;
 }
 
 // projectName -> { count, status, firstSessionId } for projects with live sessions
@@ -1895,6 +1901,9 @@ export function initTerminalDashboard() {
   document.addEventListener('click', dispatchAction);
   document.addEventListener('change', dispatchAction);
 
+  setInterval(pollClaudeSessionDots, 5000);
+  pollClaudeSessionDots();
+
   GetTerminalAccounts().then(m => { dashboardState.terminalAccounts = m || {}; })
     .catch(err => console.warn('terminal accounts unavailable:', err));
   GetTerminalRunners().then(m => { dashboardState.terminalRunners = m || {}; })
@@ -1985,6 +1994,51 @@ export function initTerminalDashboard() {
 function isDashboardVisible() {
   const panel = document.getElementById('dashboardPanel');
   return panel && panel.style.display !== 'none';
+}
+
+// Claude heartbeat status (working/waiting/idle) mapped onto session-tab
+// buttons as a colored dot. Sessions are matched to tabs by working
+// directory; when several sessions share one, the most active state wins.
+let claudeDotByCwd = new Map();
+
+async function pollClaudeSessionDots() {
+  try {
+    const sessions = (await GetClaudeSessions()) || [];
+    const rank = { working: 0, waiting: 1, idle: 2 };
+    const next = new Map();
+    for (const s of sessions) {
+      const prev = next.get(s.cwd);
+      if (!prev || rank[s.status] < rank[prev]) next.set(s.cwd, s.status);
+    }
+    const changed = next.size !== claudeDotByCwd.size
+      || [...next].some(([k, v]) => claudeDotByCwd.get(k) !== v);
+    claudeDotByCwd = next;
+    if (!changed) return;
+  } catch (err) {
+    console.warn('claude session dots unavailable:', err);
+    return;
+  }
+  patchClaudeSessionDots();
+  window.itermRefreshProjectBar?.();
+}
+
+function patchClaudeSessionDots() {
+  const byId = new Map((dashboardState.itermStatus?.tabs || []).map(t => [t.sessionId, t]));
+  for (const btn of document.querySelectorAll('#dashboardPanel .term-tab-btn[data-session]')) {
+    const tab = byId.get(btn.dataset.session);
+    const status = tab ? claudeDotByCwd.get(tab.path) || '' : '';
+    let dot = btn.querySelector('.term-tab-claude-dot');
+    if (!status) {
+      dot?.remove();
+      continue;
+    }
+    if (!dot) {
+      dot = document.createElement('span');
+      btn.insertBefore(dot, btn.firstChild);
+    }
+    dot.className = `term-tab-claude-dot claude-dot-${status === 'waiting' ? 'needs_action' : status}`;
+    dot.title = `Claude: ${status}`;
+  }
 }
 
 async function refreshDashboardData() {
@@ -2557,6 +2611,7 @@ export function renderTerminalDashboard() {
   }
 
   restoreCmdInputState();
+  patchClaudeSessionDots();
 
   if (dashboardState.voiceState === 'listening') {
     restoreVoiceTextareaFocus();

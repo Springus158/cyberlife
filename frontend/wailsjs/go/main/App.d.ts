@@ -249,6 +249,8 @@ export function IsDevMode():Promise<boolean>;
 
 export function IsGitRepo(arg1:string):Promise<boolean>;
 
+export function KillClaudeSession(arg1:number,arg2:boolean):Promise<void>;
+
 export function LaunchITerm():Promise<void>;
 
 export function ListProjectRepos(arg1:string):Promise<Array<main.ProjectRepo>>;

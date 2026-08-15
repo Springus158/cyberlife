@@ -13,7 +13,7 @@ import { builtinOn } from './addon-state.js';
 import {
   GetWidgetSettings, SetWidgetSettings, GetKanban, GetAutomationRuns,
   GetGmailConfig, GmailInboxUnread, GetProjectWidgets, SetProjectWidgets,
-  GetClaudeSessions,
+  GetClaudeSessions, KillClaudeSession,
 } from '../../wailsjs/go/main/App.js';
 
 // ============================================
@@ -489,7 +489,94 @@ async function renderClaudeSessions(el) {
   };
   await draw();
   el._claudeTimer = setInterval(draw, 5000);
-  el.onclick = () => switchToModule('tab-dashboard');
+  el.onclick = () => openClaudeSessionsPopup();
+}
+
+// Session manager popup: the widget's row list plus close (SIGTERM) and
+// kill (SIGKILL) per session. Refreshes while open so a terminated session
+// disappears once its heartbeat dies.
+function openClaudeSessionsPopup() {
+  document.querySelector('.claude-sessions-modal')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal claude-sessions-modal';
+  overlay.innerHTML = `
+    <div class="modal-content" style="width:520px">
+      <h2>✳️ Sesje Claude Code</h2>
+      <div class="claude-sessions-list"><div class="widget-empty">Ładowanie…</div></div>
+      <div class="claude-sessions-footer">
+        <span class="widget-empty">Zamknij = SIGTERM (grzecznie) · Kill = SIGKILL</span>
+        <button class="claude-sessions-close-btn">Zamknij okno (Esc)</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const list = overlay.querySelector('.claude-sessions-list');
+
+  const close = () => {
+    clearInterval(timer);
+    document.removeEventListener('keydown', onKey);
+    overlay.remove();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      close();
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+  overlay.querySelector('.claude-sessions-close-btn').onclick = close;
+
+  const badge = {
+    working: '<span class="widget-claude-badge working">● working</span>',
+    waiting: '<span class="widget-claude-badge waiting">◐ waiting</span>',
+    idle: '<span class="widget-claude-badge idle">○ idle</span>',
+  };
+  const draw = async () => {
+    if (!overlay.isConnected) {
+      clearInterval(timer);
+      return;
+    }
+    try {
+      const sessions = (await GetClaudeSessions()) || [];
+      if (!sessions.length) {
+        list.innerHTML = '<div class="widget-empty">Brak aktywnych sesji Claude Code</div>';
+        return;
+      }
+      list.innerHTML = sessions.map(s => `
+        <div class="claude-sessions-row">
+          <div class="claude-sessions-info">
+            <span class="widget-claude-name">${escapeHtml(s.cwd.split('/').pop() || s.cwd)}</span>
+            <span class="claude-sessions-cwd">${escapeHtml(s.cwd)} · pid ${s.pid}${s.waitingFor ? ` · czeka: ${escapeHtml(s.waitingFor)}` : ''}</span>
+          </div>
+          <span class="widget-claude-age">${s.updatedAt ? shortTime(s.updatedAt) : ''}</span>
+          ${badge[s.status] || badge.idle}
+          <button class="claude-sessions-kill" data-pid="${s.pid}" data-force="0" title="Zakończ proces (SIGTERM)">Zamknij</button>
+          <button class="claude-sessions-kill force" data-pid="${s.pid}" data-force="1" title="Zabij proces (SIGKILL) — bez zapisu stanu">Kill</button>
+        </div>
+      `).join('');
+      list.querySelectorAll('.claude-sessions-kill').forEach((btn) => {
+        btn.onclick = async () => {
+          const force = btn.dataset.force === '1';
+          if (force && !window.confirm('SIGKILL — proces zginie natychmiast, bez sprzątania. Na pewno?')) return;
+          btn.disabled = true;
+          try {
+            await KillClaudeSession(Number(btn.dataset.pid), force);
+            btn.textContent = '✓';
+          } catch (err) {
+            console.warn('Claude session kill failed:', err);
+            btn.textContent = 'błąd';
+            btn.disabled = false;
+          }
+          setTimeout(draw, 700);
+        };
+      });
+    } catch (err) {
+      console.warn('Claude sessions popup load failed:', err);
+      list.innerHTML = '<div class="widget-empty">Sesje niedostępne</div>';
+    }
+  };
+  draw();
+  const timer = setInterval(draw, 3000);
 }
 
 function shortTime(iso) {

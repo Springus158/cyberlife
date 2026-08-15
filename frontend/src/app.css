@@ -5852,6 +5852,51 @@ body.wails-fullscreen .titlebar-drag-region {
 .widget-claude-badge.waiting { color: var(--warning, #f9e2af); }
 .widget-claude-badge.idle { color: var(--text-muted); font-weight: 400; }
 
+/* Reuses the claude-dot-* status colors/pulse from the project bar */
+.term-tab-claude-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.claude-sessions-list { display: flex; flex-direction: column; gap: 2px; max-height: 55vh; overflow-y: auto; }
+.claude-sessions-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  padding: 0.45em 0.3em;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.86em;
+}
+.claude-sessions-row:last-child { border-bottom: none; }
+.claude-sessions-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1em; }
+.claude-sessions-cwd { color: var(--text-muted); font-size: 0.82em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.claude-sessions-kill {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  padding: 0.25em 0.6em;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+.claude-sessions-kill:hover { border-color: var(--accent); color: var(--text-primary); }
+.claude-sessions-kill.force:hover { border-color: var(--error); color: var(--error); }
+.claude-sessions-footer { display: flex; align-items: center; justify-content: space-between; gap: 1em; margin-top: 14px; }
+.claude-sessions-close-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  padding: 0.35em 0.8em;
+  cursor: pointer;
+}
+.claude-sessions-close-btn:hover { border-color: var(--accent); color: var(--text-primary); }
+
 /* acorn-style heartbeat: a bright dot sweeping back and forth on a dim line */
 .widget-claude-pulse {
   grid-column: 1 / -1;

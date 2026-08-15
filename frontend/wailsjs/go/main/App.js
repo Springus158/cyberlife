@@ -482,6 +482,10 @@ export function IsGitRepo(arg1) {
   return window['go']['main']['App']['IsGitRepo'](arg1);
 }
 
+export function KillClaudeSession(arg1, arg2) {
+  return window['go']['main']['App']['KillClaudeSession'](arg1, arg2);
+}
+
 export function LaunchITerm() {
   return window['go']['main']['App']['LaunchITerm']();
 }

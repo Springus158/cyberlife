@@ -3,6 +3,7 @@ package claude
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -122,4 +123,24 @@ func statusRank(s string) int {
 func processAlive(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// KillSession terminates a Claude Code process. Only pids currently present
+// in the heartbeat dir count — this must never become a generic kill(1).
+func KillSession(pid int, force bool) error {
+	for _, s := range LiveSessions() {
+		if s.PID != pid {
+			continue
+		}
+		sig := syscall.SIGTERM
+		if force {
+			sig = syscall.SIGKILL
+		}
+		if err := syscall.Kill(pid, sig); err != nil {
+			return fmt.Errorf("kill pid %d: %w", pid, err)
+		}
+		logging.Info("claude session killed", "pid", pid, "cwd", s.Cwd, "force", force)
+		return nil
+	}
+	return fmt.Errorf("pid %d is not a live Claude Code session", pid)
 }
