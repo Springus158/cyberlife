@@ -294,6 +294,20 @@ export async function fvSetPaid({ http, cl }, company, fvId, paid, paidDate) {
   }
 }
 
+export const FV_APPROVALS = ['received', 'accepted', 'rejected'];
+
+// Fakturownia's expense acceptance flow (Otrzymana / Zatwierdzona /
+// Odrzucona) lives in approval_status — separate from the payment status
+export async function fvSetApproval({ http }, company, fvId, approval) {
+  if (!FV_APPROVALS.includes(approval)) {
+    throw new Error(`approval must be one of ${FV_APPROVALS.join(', ')}, got "${approval}"`);
+  }
+  return fvRequest(http, company, `/invoices/${fvId}.json`, {
+    method: 'PUT',
+    body: { invoice: { approval_status: approval } },
+  });
+}
+
 function isSale(f) {
   return String(f.income) === '1' || f.income === true;
 }
@@ -343,6 +357,7 @@ function mapInvoice(f, company) {
     paidAmount: Number(f.paid) || 0,
     paidDate: f.paid_date || '',
     kind: f.kind || 'vat',
+    ...(f.approval_status ? { fvApproval: f.approval_status } : {}),
     // Positions say what the document was issued FOR — kept slim; tax can
     // be a rate or 'zw'/'np', so it stays as-is for display
     ...(Array.isArray(f.positions) && f.positions.length ? {

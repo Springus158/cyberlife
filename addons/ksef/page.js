@@ -8,7 +8,7 @@ import {
   fvUpdateClientBankAccount,
 } from './fakturownia.js';
 import {
-  syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, clearTokenCache, today,
+  syncCompany, createInvoice, sendToKsef, checkSendStatus, setPaid, setApproval, clearTokenCache, today,
   runR2Backup, r2Configured,
 } from './service.js';
 import { lineNet, lineVat } from './fa3.js';
@@ -35,6 +35,23 @@ function ksefMark(inv) {
   if (inv.kind === 'proforma') return '<span class="ksefad-muted">—</span>';
   if (inv.sendState === 'error') return `<span class="ksefad-warn" title="${esc(inv.sendError || 'błąd wysyłki')}">⚠</span>`;
   return '<span class="ksefad-no" title="brak w KSeF">✗</span>';
+}
+
+const APPROVALS = [
+  ['received', 'Otrzymana', 'var(--warning, #fab387)'],
+  ['accepted', 'Zatwierdzona', 'var(--success, #a6e3a1)'],
+  ['rejected', 'Odrzucona', 'var(--error, #f38ba8)'],
+];
+
+// Fakturownia's expense acceptance flow — editable inline, pushed to
+// Fakturownia on change (dual mode, cost documents only)
+function approvalCell(inv) {
+  if (inv.dir !== 'cost' || !inv.fvId) return '<span class="ksefad-muted">—</span>';
+  const color = APPROVALS.find(([v]) => v === inv.fvApproval)?.[2] || 'var(--text-muted, #6c7086)';
+  return `<select data-approval="${esc(inv.id)}" style="color:${color}; font-weight:600">
+    ${inv.fvApproval ? '' : '<option value="" selected>—</option>'}
+    ${APPROVALS.map(([v, label, c]) => `<option value="${v}" style="color:${c}" ${inv.fvApproval === v ? 'selected' : ''}>${label}</option>`).join('')}
+  </select>`;
 }
 
 function fvMark(inv) {
@@ -373,7 +390,7 @@ export function renderPage(el, deps) {
       ${view.error ? `<div class="ksefad-error">${esc(view.error)}</div>` : ''}
       <div class="ksefad-scroll">
         <table class="ksefad-table">
-          <thead><tr><th>Number</th><th>Date</th><th>Contractor</th><th>Gross</th><th>Status</th><th>KSeF</th>${dual ? '<th>Fakt.</th>' : ''}<th>PDF</th></tr></thead>
+          <thead><tr><th>Number</th><th>Date</th><th>Contractor</th><th>Gross</th><th>Status</th><th>KSeF</th>${dual ? '<th>Fakt.</th><th title="status akceptacji w Fakturowni — zmiana zapisuje się też tam">Akcept.</th>' : ''}<th>PDF</th></tr></thead>
           <tbody>
             ${invoices.map((inv, i) => `
               <tr data-id="${esc(inv.id)}" class="${i === view.selected ? 'sel' : ''}">
@@ -384,7 +401,8 @@ export function renderPage(el, deps) {
                 <td style="text-align:right">${zl(inv.gross, inv.currency)}</td>
                 <td>${payBadge(inv)}</td>
                 <td style="text-align:center">${ksefMark(inv)}</td>
-                ${dual ? `<td style="text-align:center">${fvMark(inv)}</td>` : ''}
+                ${dual ? `<td style="text-align:center">${fvMark(inv)}</td>
+                <td style="text-align:center">${approvalCell(inv)}</td>` : ''}
                 <td style="text-align:center">${fileMap.has(inv.id)
                   ? `<button class="ksefad-btn" data-pdf="${esc(inv.id)}" title="Podgląd PDF">📄</button>`
                   : '<span class="ksefad-muted">—</span>'}</td>
@@ -416,7 +434,25 @@ export function renderPage(el, deps) {
   el.querySelector('#ksefadSync').onclick = () => runSync(el, deps);
   el.querySelector('#ksefadNew').onclick = () => openCreateForm(el, deps);
   el.querySelectorAll('tbody tr').forEach((tr, i) => {
-    tr.onclick = () => { view.selected = i; openDetail(el, deps, tr.dataset.id); };
+    tr.onclick = (e) => {
+      if (e.target.closest('select')) return;
+      view.selected = i;
+      openDetail(el, deps, tr.dataset.id);
+    };
+  });
+  el.querySelectorAll('[data-approval]').forEach((sel) => {
+    sel.onclick = (e) => e.stopPropagation();
+    sel.onchange = async () => {
+      if (!sel.value) return;
+      sel.disabled = true;
+      try {
+        await setApproval(deps, comp, sel.dataset.approval, sel.value);
+      } catch (err) {
+        deps.cl.log('setApproval failed:', err);
+        view.error = `Nie udało się zmienić statusu akceptacji: ${err.message || err}`;
+      }
+      renderPage(el, deps);
+    };
   });
   el.querySelectorAll('[data-pdf]').forEach((btn) => {
     btn.onclick = (e) => {

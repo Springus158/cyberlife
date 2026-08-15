@@ -3,7 +3,7 @@
 // by hand (or a category for non-invoice entries) and print the monthly
 // report for the accountant.
 
-import { parseStatement, matchTransactions, categorize, counterAccount, buildAccountIndex } from './bank.js';
+import { parseStatement, matchTransactions, categorize, counterAccount, buildAccountIndex, scanTaxCalendar } from './bank.js';
 import { setPaid, archiveStatementOriginal } from './service.js';
 import { fakturowniaMode, createDwInFakturownia } from './fakturownia.js';
 import {
@@ -102,6 +102,43 @@ async function patchTx(store, company, tx, patch) {
   await store.saveBankMonth(company.id, month, list.map((t) => (t.id === tx.id ? { ...t, ...patch } : t)));
 }
 
+// One row per rule for the viewed month: green when the transfer is on the
+// statement, yellow when the catch-up landed on a later statement, red when
+// missing, muted when the user marked the gap expected. The running month
+// only warns softly — its statement isn't complete yet.
+function taxAlertsHtml(store, company, month) {
+  const txs = store.bankMonth(company.id, month);
+  if (!txs.length) return '';
+  const byMonth = {};
+  for (const mo of store.bankMonths(company.id)) byMonth[mo] = store.bankMonth(company.id, mo);
+  const decisions = store.taxAlertState(company.id).decisions || {};
+  const inProgress = month === currentMonth();
+  const rows = (scanTaxCalendar(byMonth)[month] || []).map((r) => {
+    if (r.status === 'found') {
+      const hits = r.hits.map((h) => `${h.date.slice(8)}.${h.date.slice(5, 7)} ${money(h.amount)}${h.period ? ` (${h.period})` : ''}`).join(', ');
+      return `<span class="ksefad-ok">✓ ${esc(r.label)}</span> <span class="ksefad-muted">${esc(hits)}</span>`;
+    }
+    if (r.status === 'paid-late') {
+      return `<span style="color:var(--warning, #f9e2af)">⏱ ${esc(r.label)}</span> <span class="ksefad-muted">${esc(r.lateNote)}</span>`;
+    }
+    const decision = decisions[`${month}:${r.id}`];
+    if (decision) {
+      return `<span class="ksefad-muted">◦ ${esc(r.label)}: brak — przewidywane${decision.note ? ` (${esc(decision.note)})` : ''}
+        <button class="ksefad-btn" data-taxundo="${esc(r.id)}" title="Cofnij — to jednak alert">cofnij</button></span>`;
+    }
+    if (inProgress) {
+      return `<span class="ksefad-muted">… ${esc(r.label)}: jeszcze brak <span title="${esc(r.hint)}">(${esc(r.hint)})</span></span>`;
+    }
+    return `<span style="color:var(--error, #f38ba8)">✗ ${esc(r.label)}: BRAK</span>
+      <span class="ksefad-muted">(${esc(r.hint)})</span>
+      <button class="ksefad-btn" data-taxok="${esc(r.id)}" title="Brak tej płatności w tym miesiącu jest OK — nie alarmuj">przewidywane</button>`;
+  });
+  return `<div class="ksefad-bar" style="gap:18px; padding:6px 10px; border:1px solid var(--border, #333); border-radius:6px; align-items:center">
+    <span title="Płatności podatkowe, które powinny być na każdym miesięcznym wyciągu">💰 Podatki ${esc(monthLabel(month))}${inProgress ? ' <span class="ksefad-muted">(w toku)</span>' : ''}:</span>
+    ${rows.join('<span class="ksefad-muted">·</span>')}
+  </div>`;
+}
+
 function fmtAccount(acc) {
   return String(acc || '').replace(/(\d{2})(?=(\d{4})+$)/, '$1 ').replace(/(\d{4})(?=\d)/g, '$1 ');
 }
@@ -193,6 +230,7 @@ export function renderBankPage(el, deps) {
       </div>
       ${bankView.error ? `<div class="ksefad-error">${esc(bankView.error)}</div>` : ''}
       ${bankView.info ? `<div class="ksefad-muted">${esc(bankView.info)}</div>` : ''}
+      ${company && bankView.mode === 'month' ? taxAlertsHtml(store, company, bankView.month) : ''}
       ${txs.length ? `
         <div class="ksefad-bar ksefad-muted" style="gap:16px">
           <span>${txs.length} operacji, pokazuję ${Math.min(shown.length, RENDER_CAP)}${shown.length > RENDER_CAP ? ` z ${shown.length} — zawęź szukajką` : ''}:</span>
@@ -255,6 +293,19 @@ export function renderBankPage(el, deps) {
 
   const rerender = () => renderBankPage(el, deps);
   bindPeriodBar(el, bankView, rerender);
+  el.querySelectorAll('[data-taxok]').forEach((btn) => {
+    btn.onclick = async () => {
+      await store.setTaxAlertDecision(company.id, bankView.month, btn.dataset.taxok,
+        { expected: true, note: '', at: new Date().toISOString() });
+      rerender();
+    };
+  });
+  el.querySelectorAll('[data-taxundo]').forEach((btn) => {
+    btn.onclick = async () => {
+      await store.setTaxAlertDecision(company.id, bankView.month, btn.dataset.taxundo, null);
+      rerender();
+    };
+  });
   el.querySelectorAll('[data-show]').forEach((cb) => {
     cb.onchange = () => { bankView.show[cb.dataset.show] = cb.checked; rerender(); };
   });

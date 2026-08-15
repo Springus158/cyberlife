@@ -12,11 +12,11 @@ import { renderBankPage, bankOnKey, linkRefund, unlinkRefund } from './bank-page
 import { renderFilesPage, filesOnKey } from './files-page.js';
 import { renderFvPage, fvOnKey } from './fv-page.js';
 import {
-  syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid, backfillFvSalePdfs,
+  syncCompany, createInvoice, createCostFromFile, sendToKsef, setPaid, setApproval, backfillFvSalePdfs,
   archiveStatementOriginal, runR2Backup, r2Configured, ensureFileExtraction,
 } from './service.js';
 import { importFromFakturownia, fakturowniaMode, fvUpdateClientBankAccount } from './fakturownia.js';
-import { parseStatement, matchTransactions, categorize } from './bank.js';
+import { parseStatement, matchTransactions, categorize, scanTaxCalendar } from './bank.js';
 import { extractFields, matchFileToInvoice } from './files.js';
 
 export default async function activate(cl) {
@@ -233,6 +233,16 @@ export default async function activate(cl) {
     return { invoice: updated };
   });
 
+  cl.registerAgentTool('set_invoice_approval', async (args) => {
+    const inv = store.getInvoice(args.id);
+    if (!inv) throw new Error(`invoice ${args.id} not found`);
+    const company = store.company(inv.companyId);
+    if (!company) throw new Error(`the company of invoice ${args.id} is no longer configured`);
+    const updated = await setApproval(deps, company, args.id, args.approval);
+    if (pageEl) renderPage(pageEl, deps);
+    return { invoice: updated };
+  });
+
   cl.registerAgentTool('sync', async (args) => {
     const targets = args.company ? [resolveCompany(args.company)] : store.companies();
     const results = {};
@@ -382,8 +392,39 @@ export default async function activate(cl) {
       await store.saveBankMonth(company.id, mo, list);
       months[mo] = { total: list.length, added, matched: list.filter((t) => t.invoiceId).length };
     }
+    const calendar = taxAlertCalendar(company.id);
+    const taxAlerts = {};
+    for (const mo of byMonth.keys()) taxAlerts[mo] = calendar[mo] || [];
     if (bankEl) renderBankPage(bankEl, deps);
-    return { bank: stmt.bank, account: stmt.account, currency: stmt.currency, period: stmt.period, months, original };
+    return { bank: stmt.bank, account: stmt.account, currency: stmt.currency, period: stmt.period, months, taxAlerts, original };
+  });
+
+  function taxAlertCalendar(companyId) {
+    const byMonth = {};
+    for (const mo of store.bankMonths(companyId)) byMonth[mo] = store.bankMonth(companyId, mo);
+    const decisions = store.taxAlertState(companyId).decisions || {};
+    const calendar = scanTaxCalendar(byMonth);
+    for (const [mo, rows] of Object.entries(calendar)) {
+      calendar[mo] = rows.map((r) => {
+        if (r.status !== 'missing') return r;
+        const decision = decisions[`${mo}:${r.id}`];
+        return { ...r, status: decision ? 'expected-missing' : 'MISSING', note: decision?.note || '' };
+      });
+    }
+    return calendar;
+  }
+
+  cl.registerAgentTool('tax_alerts', async (args) => {
+    const company = resolveCompany(args.company);
+    if (args.markRule) {
+      if (!/^\d{4}-\d{2}$/.test(args.month || '')) throw new Error('month YYYY-MM required with markRule');
+      await store.setTaxAlertDecision(company.id, args.month, args.markRule,
+        args.expected === false ? null : { expected: true, note: args.note || '', at: new Date().toISOString() });
+      if (bankEl) renderBankPage(bankEl, deps);
+    }
+    const calendar = taxAlertCalendar(company.id);
+    const months = args.month ? [args.month] : store.bankMonths(company.id).slice(0, args.limit || 6);
+    return { months: months.map((mo) => ({ month: mo, alerts: calendar[mo] || [] })) };
   });
 
   cl.registerAgentTool('add_invoice_file', async (args) => {

@@ -7,8 +7,19 @@ import { assertDate, normalizeNip } from './store.js';
 import { extractFields } from './files.js';
 import {
   fakturowniaMode, createInFakturownia, createCostInFakturownia, fvSendToKsef, fvGovStatus, fvSetPaid,
-  importFromFakturownia, fetchFakturowniaClients, fetchFvPdf,
+  fvSetApproval, importFromFakturownia, fetchFakturowniaClients, fetchFvPdf,
 } from './fakturownia.js';
+
+// Fakturownia first, so a rejected push never leaves the local mirror
+// claiming a status Fakturownia does not have
+export async function setApproval(deps, company, invoiceId, approval) {
+  const inv = deps.store.getInvoice(invoiceId);
+  if (!inv) throw new Error(`invoice ${invoiceId} not found`);
+  if (fakturowniaMode(company) === 'dual' && inv.fvId) {
+    await fvSetApproval(deps, company, inv.fvId, approval);
+  }
+  return deps.store.updateInvoice(invoiceId, { fvApproval: approval });
+}
 
 export function r2Configured(store, companyId) {
   const cfg = store.r2Config(companyId);

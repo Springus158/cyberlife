@@ -113,6 +113,18 @@
       }
     },
     {
+      "name": "set_invoice_approval",
+      "description": "Set the Fakturownia acceptance status of a cost invoice (received=Otrzymana, accepted=Zatwierdzona, rejected=Odrzucona); in dual mode the change is pushed to Fakturownia first",
+      "schema": {
+        "type": "object",
+        "required": ["id", "approval"],
+        "properties": {
+          "id": { "type": "string" },
+          "approval": { "type": "string", "enum": ["received", "accepted", "rejected"] }
+        }
+      }
+    },
+    {
       "name": "sync",
       "description": "Fetch new invoices from KSeF (sales and incoming costs) for one or all companies",
       "schema": {
@@ -164,6 +176,21 @@
           "company": { "type": "string" },
           "dataBase64": { "type": "string", "description": "The statement PDF, base64-encoded" },
           "name": { "type": "string", "description": "Original file name (for the archive)" }
+        }
+      }
+    },
+    {
+      "name": "tax_alerts",
+      "description": "Check monthly statements for statutory tax payments (ZUS, PIT-4R advance). Returns per-month status: found (with dates/amounts/period markers like 26M06), MISSING, or expected-missing (user confirmed the gap is fine). Pass month+markRule to record such a decision (expected: false clears it).",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "company": { "type": "string", "description": "Company name, id or NIP; optional when only one is configured" },
+          "month": { "type": "string", "description": "YYYY-MM; omit for the last months on record" },
+          "limit": { "type": "integer", "default": 6, "description": "How many recent months when month is omitted" },
+          "markRule": { "type": "string", "enum": ["zus", "pit4r"], "description": "Rule id to mark as expected-missing for the given month" },
+          "expected": { "type": "boolean", "default": true, "description": "false clears a previous expected-missing decision" },
+          "note": { "type": "string", "description": "Why the gap is expected (stored with the decision)" }
         }
       }
     },

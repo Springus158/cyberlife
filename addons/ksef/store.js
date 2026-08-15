@@ -63,7 +63,7 @@ export function createStore(cl) {
     for (const key of Object.keys(cache)) {
       if (key.startsWith(`inv:${id}:`) || key.startsWith(`clients:${id}`) || key.startsWith(`bank:${id}:`)
         || key.startsWith(`files:${id}`) || key.startsWith(`stmts:${id}`) || key.startsWith(`r2m:${id}`)
-        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}` || key === `fvsync:${id}` || key === `r2cfg:${id}`) {
+        || key === `contractors:${id}` || key === `sync:${id}` || key === `fvinfo:${id}` || key === `caccts:${id}` || key === `fvsync:${id}` || key === `r2cfg:${id}` || key === `taxal:${id}`) {
         await drop(key);
       }
     }
@@ -133,6 +133,7 @@ export function createStore(cl) {
       merged.paid = incoming.paid || false;
       merged.paidAmount = incoming.paidAmount ?? 0;
       merged.paidDate = incoming.paidDate || '';
+      merged.fvApproval = incoming.fvApproval || existing.fvApproval;
     } else {
       merged.paid = existing.paid || incoming.paid || false;
       merged.paidAmount = existing.paidAmount ?? incoming.paidAmount ?? 0;
@@ -448,6 +449,23 @@ export function createStore(cl) {
     await saveR2Config(companyId, { ...(r2Config(companyId) || {}), last });
   }
 
+  // ---- tax alerts (decisions: {'YYYY-MM:ruleId': {expected, note, at}};
+  // expected = user confirmed the missing payment is fine this month) ----
+
+  function taxAlertState(companyId) {
+    return cache[`taxal:${companyId}`] || { decisions: {} };
+  }
+
+  async function setTaxAlertDecision(companyId, month, ruleId, decision) {
+    const state = { ...taxAlertState(companyId) };
+    state.decisions = { ...state.decisions };
+    const key = `${month}:${ruleId}`;
+    if (decision) state.decisions[key] = decision;
+    else delete state.decisions[key];
+    await put(`taxal:${companyId}`, state);
+    return state;
+  }
+
   function fvSyncState(companyId) {
     return cache[`fvsync:${companyId}`] || null;
   }
@@ -495,6 +513,8 @@ export function createStore(cl) {
     saveClientAccounts,
     fvSyncState,
     setFvSyncState,
+    taxAlertState,
+    setTaxAlertDecision,
     stmtFiles,
     addStmtFile,
     r2Config,

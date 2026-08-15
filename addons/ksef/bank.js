@@ -375,6 +375,89 @@ function fxPlausible(txAmount, txCur, invGross, invCur) {
   return ratio >= from[0] / to[1] && ratio <= from[1] / to[0];
 }
 
+// ---- tax alerts: statutory payments every monthly statement must contain ----
+
+// minAmount filters out correction transfers (a 1,04 zł ZUS adjustment must
+// not count as the month's contribution)
+export const DEFAULT_TAX_RULES = [
+  { id: 'zus', label: 'ZUS składki', pattern: '(^|[^A-Z])N?ZUS([^A-Z]|$)|ZAKLAD UBEZPIECZEN', minAmount: 500, hint: 'zwykle 7–9. dnia, termin 20.' },
+  { id: 'pit4r', label: 'Zaliczka PIT-4R', pattern: 'PIT[- ]?4R', minAmount: 100, hint: 'zwykle 7–16. dnia, termin 20.' },
+];
+
+const TAX_PERIOD_RE = /\b(\d{2}M\d{2})\b/;
+
+export function scanTaxRules(txs, rules = DEFAULT_TAX_RULES) {
+  return rules.filter((r) => r.enabled !== false).map((rule) => {
+    const re = new RegExp(rule.pattern, 'i');
+    const hits = txs
+      .filter((t) => t.amount < 0 && Math.abs(t.amount) >= (rule.minAmount || 0)
+        && re.test(ascii(`${t.type} ${t.desc}`)))
+      .map((t) => ({
+        txId: t.id,
+        date: t.date,
+        amount: t.amount,
+        period: (TAX_PERIOD_RE.exec(t.desc) || [])[1] || '',
+      }));
+    return { id: rule.id, label: rule.label, hint: rule.hint || '', found: hits.length > 0, hits };
+  });
+}
+
+// A payment due in month M settles the previous month: '2026-07' → '26M06'
+function prevPeriodMarker(month) {
+  const [y, mo] = month.split('-').map(Number);
+  const prev = mo === 1 ? [y - 1, 12] : [y, mo - 1];
+  return `${String(prev[0]).slice(2)}M${String(prev[1]).padStart(2, '0')}`;
+}
+
+// Cross-month view: a gap month goes 'paid-late' when the catch-up payment
+// shows up on a LATER statement — matched by the period marker in the title
+// (PIT-4R), or for markerless transfers (ZUS) by a later month carrying more
+// payments than it needs for itself.
+// byMonth: {'YYYY-MM': txs[]}. Returns {'YYYY-MM': [{id, label, hint,
+// status: found|paid-late|missing, hits, lateNote}]}
+export function scanTaxCalendar(byMonth, rules = DEFAULT_TAX_RULES) {
+  const months = Object.keys(byMonth).sort();
+  const out = Object.fromEntries(months.map((m) => [m, []]));
+  for (const rule of rules.filter((r) => r.enabled !== false)) {
+    const hitsOf = new Map(months.map((m) => [
+      m, scanTaxRules(byMonth[m], [rule])[0].hits.map((h) => ({ ...h, stmtMonth: m })),
+    ]));
+    const allHits = months.flatMap((m) => hitsOf.get(m));
+    const spare = new Map(months.map((m) => [m, hitsOf.get(m).length - 1]));
+    for (const m of months) {
+      const own = hitsOf.get(m);
+      const expected = prevPeriodMarker(m);
+      // A month whose only transfers carry OTHER period markers is a pure
+      // catch-up month — those hits belong to the gap months, not to it
+      const ownForMonth = own.filter((h) => !h.period || h.period === expected);
+      let row;
+      if (ownForMonth.length) {
+        row = { status: 'found', hits: ownForMonth, lateNote: '' };
+      } else {
+        const late = allHits.filter((h) => h.period === expected && h.stmtMonth > m);
+        if (late.length) {
+          row = { status: 'paid-late', hits: late, lateNote: `zapłacone ${late[0].date} (wyciąg ${late[0].stmtMonth})` };
+        } else {
+          const donor = months.find((lm) => lm > m && spare.get(lm) > 0
+            && hitsOf.get(lm).every((h) => !h.period));
+          if (donor) {
+            spare.set(donor, spare.get(donor) - 1);
+            row = {
+              status: 'paid-late',
+              hits: hitsOf.get(donor),
+              lateNote: `prawdopodobnie nadrobione — ${hitsOf.get(donor).length} przelewy na wyciągu ${donor} (do potwierdzenia)`,
+            };
+          } else {
+            row = { status: 'missing', hits: [], lateNote: '' };
+          }
+        }
+      }
+      out[m].push({ id: rule.id, label: rule.label, hint: rule.hint || '', ...row });
+    }
+  }
+  return out;
+}
+
 function counterpartyMatches(tx, inv, wantDir, descAscii) {
   const otherNip = wantDir === 'cost' ? inv.sellerNip : inv.buyerNip;
   if (otherNip && normalizeNip(tx.desc).includes(otherNip)) return true;
