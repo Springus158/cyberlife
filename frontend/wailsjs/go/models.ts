@@ -157,6 +157,33 @@ export namespace addons {
 
 }
 
+export namespace claude {
+	
+	export class SessionInfo {
+	    sessionId: string;
+	    pid: number;
+	    status: string;
+	    waitingFor: string;
+	    updatedAt: number;
+	    cwd: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sessionId = source["sessionId"];
+	        this.pid = source["pid"];
+	        this.status = source["status"];
+	        this.waitingFor = source["waitingFor"];
+	        this.updatedAt = source["updatedAt"];
+	        this.cwd = source["cwd"];
+	    }
+	}
+
+}
+
 export namespace git {
 	
 	export class ChangedFile {

@@ -29,6 +29,7 @@ func widgetCatalog() []widgetInfo {
 		{ID: "board-summary", Title: "Board", Icon: "📋", Description: "Per-column task counts and current in-progress tasks", Dashboard: true},
 		{ID: "recent-automations", Title: "Automations", Icon: "⚡", Description: "Recent automation runs with status", Dashboard: true},
 		{ID: "unread-mail", Title: "Unread Mail", Icon: "✉️", Description: "Unread inbox counts per linked Gmail account", Dashboard: true},
+		{ID: "claude-sessions", Title: "Claude Code", Icon: "✳️", Description: "Live Claude Code sessions on this machine with working/waiting/idle status", Dashboard: true},
 	}
 }
 

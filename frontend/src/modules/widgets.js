@@ -13,6 +13,7 @@ import { builtinOn } from './addon-state.js';
 import {
   GetWidgetSettings, SetWidgetSettings, GetKanban, GetAutomationRuns,
   GetGmailConfig, GmailInboxUnread, GetProjectWidgets, SetProjectWidgets,
+  GetClaudeSessions,
 } from '../../wailsjs/go/main/App.js';
 
 // ============================================
@@ -28,6 +29,7 @@ export const WIDGETS = [
   { id: 'board-summary', title: 'Board', icon: '📋', render: renderBoardSummary },
   { id: 'recent-automations', title: 'Automations', icon: '⚡', render: renderRecentAutomations },
   { id: 'unread-mail', title: 'Unread Mail', icon: '✉️', render: renderUnreadMail, builtin: 'gmail' },
+  { id: 'claude-sessions', title: 'Claude Code', icon: '✳️', render: renderClaudeSessions },
 ];
 
 export function widgetById(id) {
@@ -446,6 +448,48 @@ async function renderUnreadMail(el) {
     console.warn('Mail widget load failed:', err);
     el.innerHTML = '<div class="widget-empty">Mail unavailable</div>';
   }
+}
+
+// Live Claude Code sessions from ~/.claude/sessions heartbeats (any
+// terminal on the machine, not just Cyber Life's own). Statuses follow
+// acorn: working gets the sweeping-dot pulse, waiting is amber, idle dim.
+// The widget polls itself every 5s — the shared 120s interval scope is far
+// too slow for "is it still working?" glances; the timer dies with the DOM
+// node, so re-renders and removal need no explicit cleanup.
+async function renderClaudeSessions(el) {
+  clearInterval(el._claudeTimer);
+  const draw = async () => {
+    if (!el.isConnected && el._claudeTimer) {
+      clearInterval(el._claudeTimer);
+      return;
+    }
+    try {
+      const sessions = (await GetClaudeSessions()) || [];
+      if (!sessions.length) {
+        el.innerHTML = '<div class="widget-empty">Brak aktywnych sesji Claude Code</div>';
+        return;
+      }
+      const badge = {
+        working: '<span class="widget-claude-badge working">● working</span>',
+        waiting: '<span class="widget-claude-badge waiting">◐ waiting</span>',
+        idle: '<span class="widget-claude-badge idle">○ idle</span>',
+      };
+      el.innerHTML = sessions.map(s => `
+        <div class="widget-claude-row ${s.status}" title="${escapeHtml(s.cwd)} · pid ${s.pid}${s.waitingFor ? ` · czeka na: ${escapeHtml(s.waitingFor)}` : ''}">
+          <span class="widget-claude-name">${escapeHtml(s.cwd.split('/').pop() || s.cwd)}</span>
+          <span class="widget-claude-age">${s.updatedAt ? shortTime(s.updatedAt) : ''}</span>
+          ${badge[s.status] || badge.idle}
+          ${s.status === 'working' ? '<span class="widget-claude-pulse"><span class="widget-claude-pulse-dot"></span></span>' : ''}
+        </div>
+      `).join('');
+    } catch (err) {
+      console.warn('Claude sessions widget load failed:', err);
+      el.innerHTML = '<div class="widget-empty">Sesje Claude niedostępne</div>';
+    }
+  };
+  await draw();
+  el._claudeTimer = setInterval(draw, 5000);
+  el.onclick = () => switchToModule('tab-dashboard');
 }
 
 function shortTime(iso) {

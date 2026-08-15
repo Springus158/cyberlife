@@ -170,6 +170,10 @@ export function GetClaudeAccounts() {
   return window['go']['main']['App']['GetClaudeAccounts']();
 }
 
+export function GetClaudeSessions() {
+  return window['go']['main']['App']['GetClaudeSessions']();
+}
+
 export function GetDashboardFullscreen() {
   return window['go']['main']['App']['GetDashboardFullscreen']();
 }

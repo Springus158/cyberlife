@@ -568,6 +568,13 @@ func findClaudeCLI() string {
 	return ""
 }
 
+// GetClaudeSessions lists live Claude Code processes on this machine, read
+// from the heartbeat files under ~/.claude/sessions (any terminal, not just
+// Cyber Life's own).
+func (a *App) GetClaudeSessions() []claude.SessionInfo {
+	return claude.LiveSessions()
+}
+
 // GetTerminalTheme returns the current terminal theme name
 func (a *App) GetTerminalTheme() string {
 	if a.stateManager == nil {
