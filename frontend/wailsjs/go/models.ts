@@ -1566,6 +1566,7 @@ export namespace state {
 	    pinned: boolean;
 	    groupId?: string;
 	    claudeConfigDir?: string;
+	    defaultRunner?: string;
 	    tasks?: TaskState[];
 	    notes: string;
 	    prompts: Prompt[];
@@ -1596,6 +1597,7 @@ export namespace state {
 	        this.pinned = source["pinned"];
 	        this.groupId = source["groupId"];
 	        this.claudeConfigDir = source["claudeConfigDir"];
+	        this.defaultRunner = source["defaultRunner"];
 	        this.tasks = this.convertValues(source["tasks"], TaskState);
 	        this.notes = source["notes"];
 	        this.prompts = this.convertValues(source["prompts"], Prompt);
@@ -1656,6 +1658,7 @@ export namespace state {
 	    gmail?: GmailSettings;
 	    agentSkills?: Record<string, boolean>;
 	    runners?: Runner[];
+	    defaultRunner?: string;
 	    terminalRunners?: Record<string, string>;
 	    customHealthChecks?: CustomHealthCheck[];
 	    automations?: AutomationRule[];
@@ -1700,6 +1703,7 @@ export namespace state {
 	        this.gmail = this.convertValues(source["gmail"], GmailSettings);
 	        this.agentSkills = source["agentSkills"];
 	        this.runners = this.convertValues(source["runners"], Runner);
+	        this.defaultRunner = source["defaultRunner"];
 	        this.terminalRunners = source["terminalRunners"];
 	        this.customHealthChecks = this.convertValues(source["customHealthChecks"], CustomHealthCheck);
 	        this.automations = this.convertValues(source["automations"], AutomationRule);

@@ -97,6 +97,12 @@ more, and the view **freezes while you read** — the live stream resumes when
 you return to the bottom. App-created sessions keep 50k lines of history.
 :::
 
+:::tip Default runner
+New sessions use the project's default runner, or the global default
+from **Settings → Runners**. Pick another runner in the New Terminal
+popup for that session only.
+:::
+
 :::keyboard On the Term module
 - [[kbd:j k]] switch the viewed session
 - [[kbd:n]] new terminal · [[kbd:o]] open in iTerm2

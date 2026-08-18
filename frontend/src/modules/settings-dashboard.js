@@ -12,7 +12,7 @@ import {
   GetGlobalPromptPrefix, SetGlobalPromptPrefix,
   GetGlobalPromptSuffix, SetGlobalPromptSuffix,
   GetJiraSettings, SetJiraSettings,
-  GetGmailConfig, GetAgentSkills, SetAgentSkillEnabled, GetRunners, SaveRunner, DeleteRunner, SetGmailConfig, GmailAddAccount, GmailRemoveAccount, SetGmailMcpEnabled,
+  GetGmailConfig, GetAgentSkills, SetAgentSkillEnabled, GetRunners, SaveRunner, DeleteRunner, GetDefaultRunner, SetDefaultRunner, SetGmailConfig, GmailAddAccount, GmailRemoveAccount, SetGmailMcpEnabled,
   GmailSetAccountMcp, GmailInstallMcp, GmailMcpInstalled, GmailReauthAccount,
   GetGlobalPrompts, GetProjectPrompts, CreatePrompt, CreateGlobalPrompt,
   UpdatePrompt, UpdateGlobalPrompt, DeletePrompt, DeleteGlobalPrompt,
@@ -130,7 +130,14 @@ async function loadSettings() {
     console.warn('addons list failed:', err);
     return { addons: [], categories: [], dir: '' };
   });
-  const runners = await GetRunners().catch(() => []);
+  const runners = await GetRunners().catch((err) => {
+    console.warn('Failed to load runners:', err);
+    return [];
+  });
+  const defaultRunner = await GetDefaultRunner().catch((err) => {
+    console.warn('Failed to load default runner:', err);
+    return '';
+  });
   const globalPrompts = await GetGlobalPrompts().catch(() => []);
   const projectPrompts = appState.activeProject
     ? await GetProjectPrompts(appState.activeProject.id).catch(() => [])
@@ -139,6 +146,7 @@ async function loadSettings() {
     addonsInfo,
     agentSkills: agentSkills || [],
     runners: runners || [],
+    defaultRunner: defaultRunner || '',
     globalPrompts: globalPrompts || [],
     projectPrompts: projectPrompts || [],
     elevenLabsKey: elevenLabsKey || '',
@@ -595,14 +603,22 @@ function wireAddonsSection() {
 
 function renderRunners() {
   const runners = settings.runners || [];
+  const selected = settings.defaultRunner || 'claude';
   return `
     <div class="settings-section">
       <h2 class="settings-section-title">🏃 Runners</h2>
       <p class="settings-section-desc">
-        CLIs a session can run. Claude is built-in and always the default;
-        add any other model's CLI here (command + optional args and env) and
-        pick it when creating a terminal.
+        CLIs a session can run. Set the default used by new Term sessions
+        (a project can override this). Add any other model's CLI here
+        (command + optional args and env). Term is a scrollback viewer —
+        for a fullscreen TUI put the CLI's inline/minimal flag in Args.
       </p>
+      <div class="fc-field">
+        <label>Default for new terminals</label>
+        <select class="fc-select" id="defaultRunnerSelect">
+          ${runners.map(r => `<option value="${escapeAttr(r.id)}" ${r.id === selected ? 'selected' : ''}>${r.icon || ''} ${escapeHtml(r.name)}</option>`).join('') || '<option value="claude">✳️ Claude</option>'}
+        </select>
+      </div>
       <div id="runnersList">
         ${runners.map(r => `
           <div class="runner-row" data-runner-id="${r.id}">
@@ -631,7 +647,7 @@ function renderRunners() {
         </div>
         <div class="fc-field">
           <label>Args <span class="fc-optional">optional</span></label>
-          <input type="text" class="fc-input fc-mono" id="runnerFormArgs" placeholder="--flag value" autocomplete="off" spellcheck="false" />
+          <input type="text" class="fc-input fc-mono" id="runnerFormArgs" placeholder="--minimal" autocomplete="off" spellcheck="false" />
         </div>
         <div class="fc-field">
           <label>Env <span class="fc-optional">KEY=VALUE per line</span></label>
@@ -681,6 +697,15 @@ function wireRunners() {
     document.getElementById('runnerFormColor').value = runner?.color || '#8b5cf6';
     document.getElementById('runnerFormName').focus();
   };
+
+  document.getElementById('defaultRunnerSelect')?.addEventListener('change', async (e) => {
+    try {
+      await SetDefaultRunner(e.target.value);
+      settings.defaultRunner = e.target.value === 'claude' ? '' : e.target.value;
+    } catch (err) {
+      console.error('Failed to set default runner:', err);
+    }
+  });
 
   document.getElementById('runnerAddBtn')?.addEventListener('click', () => openForm(null));
   document.getElementById('runnerFormCancel')?.addEventListener('click', () => form.classList.add('hidden'));

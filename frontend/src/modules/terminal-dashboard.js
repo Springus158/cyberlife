@@ -10,7 +10,7 @@ import { loadClaudeAccounts, buildAccountOptions, attachAccountSelect } from './
 import { buildGroupOptions, toggleGroupCollapsed, deleteGroup, openGroupModal } from './project-groups.js';
 import { refreshGitStatus } from './git.js';
 import { renderTabbedIconPicker } from './icon-catalog.js';
-import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, SaveScreenshot, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies, SetTermViewSize, GetClaudeSessions } from '../../wailsjs/go/main/App';
+import { GetITermSessionInfo, GetITermStatus, SwitchITermTabBySessionID, OpenTmuxInITerm, CreateITermTab, RenameITermTabBySessionID, CloseITermTabBySessionID, WatchITermSession, UnwatchITermSession, WriteITermTextBySessionID, SendITermSpecialKey, GetTerminalTheme, SetTerminalTheme, GetTerminalFontSize, SetTerminalFontSize, GetITermSessionContentsByID, PasteClipboardToSession, StartVoiceRecognition, StopVoiceRecognition, ResetVoiceRecognition, FocusITerm, RequestStyledHistory, GetVoiceLang, SetVoiceLang, GetVoiceAutoSubmit, SetVoiceAutoSubmit, GetTranscriptionEngine, SetTranscriptionEngine, GetElevenLabsAPIKey, GetDashboardFullscreen, SetDashboardFullscreen, SaveScreenshot, GetProjectPrompts, GetGlobalPrompts, IncrementPromptUsage, DeleteProject, UpdateProject, GetPinnedTerminals, SetPinnedTerminal, GetTerminalNameOverrides, SetTerminalNameOverride, GetTerminalAccounts, SetTerminalAccount, ClearTerminalAccount, GetRunners, GetDefaultRunner, GetTerminalRunners, SetTerminalRunner, CreateITermTabWithRunner, CheckDependencies, SetTermViewSize, GetClaudeSessions } from '../../wailsjs/go/main/App';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { getMode, setMode } from './shell.js';
 import { toggleTermMenu } from './term-menu.js';
@@ -53,6 +53,7 @@ let dashboardState = {
   terminalAccounts: {},          // sessionId -> CLAUDE_CONFIG_DIR (which Claude account the terminal uses)
   terminalRunners: {},           // sessionId -> runner ID (absent = claude)
   runners: [],                   // available runners (claude built-in first)
+  defaultRunner: '',             // global default runner id (empty = claude)
   deps: null,                    // dependency check results (tmux, claude, ...)
   flatProjectList: localStorage.getItem('flatProjectList') === '1', // show projects without group accordions
   jiraEnabled: false,            // Jira integration on — shows the tasks/tickets badge on project tiles
@@ -368,6 +369,15 @@ function accountBadgeHtml(sessionId) {
   return `<span class="account-badge account-${account.kind} term-account-badge" title="${title}">${escapeHtml(account.label)}</span>`;
 }
 
+function resolvedDefaultRunner(proj) {
+  const candidates = [proj?.defaultRunner, dashboardState.defaultRunner, 'claude'];
+  const runners = dashboardState.runners || [];
+  for (const id of candidates) {
+    if (id && runners.some(r => r.id === id)) return id;
+  }
+  return 'claude';
+}
+
 function runnerBadgeHtml(sessionId) {
   const runnerId = dashboardState.terminalRunners[sessionId];
   if (!runnerId || runnerId === 'claude') return '';
@@ -486,6 +496,11 @@ function renderInputPanel(opts = {}) {
                 <button class="key-btn" data-act="itermSendKey" data-arg="right">→</button>
                 <button class="key-btn" data-act="itermSendKey" data-arg="up">↑</button>
                 <button class="key-btn" data-act="itermSendKey" data-arg="down">↓</button>
+                ${(() => {
+                  const last = getLastUsedPrompt();
+                  return last ? `<button class="key-btn term-last-prompt-btn" data-act="itermSendLastPrompt"
+                    title="${escapeAttr(`Ostatni prompt — kliknij aby wysłać ponownie:\n${last.content}`)}">${escapeHtml(last.title || last.content)}</button>` : '';
+                })()}
                 ${dashboardState.pinnedPrompts.length > 0 ? `
                   <span class="prompts-popup-wrapper">
                     <button class="key-btn prompts-popup-btn ${dashboardState.promptsPopupOpen ? 'active' : ''}" data-act="itermTogglePromptsPopup" title="Saved prompts">💬</button>
@@ -911,12 +926,17 @@ window.itermCreateTab = async function() {
   } catch (err) {
     console.warn('Failed to load runners:', err);
   }
+  try {
+    dashboardState.defaultRunner = await GetDefaultRunner() || '';
+  } catch (err) {
+    console.warn('Failed to load default runner:', err);
+  }
 
   const allTabs = dashboardState.itermStatus?.tabs || [];
   const tabNumber = getNextTabNumber(allTabs, projectName);
   const defaultName = `${projectName} ${tabNumber}`;
 
-  showNewTabPopup(defaultName, proj.claudeConfigDir || '', async (tabName, claudeConfigDir, runnerId) => {
+  showNewTabPopup(defaultName, proj.claudeConfigDir || '', resolvedDefaultRunner(proj), async (tabName, claudeConfigDir, runnerId) => {
     try {
       const previousSessionIds = new Set((dashboardState.itermStatus?.tabs || []).map(t => t.sessionId));
       await CreateITermTabWithRunner(proj.path, tabName, claudeConfigDir || '', runnerId || '');
@@ -964,7 +984,7 @@ window.itermRenderDashboard = () => renderTerminalDashboard();
 // Find an open tab by its working directory (used to jump to an already-open task)
 window.itermFindTabByPath = (path) => (dashboardState.itermStatus?.tabs || []).find(t => t.path === path) || null;
 
-function showNewTabPopup(defaultName, defaultConfigDir, onCreate) {
+function showNewTabPopup(defaultName, defaultConfigDir, defaultRunnerId, onCreate) {
   document.querySelector('.newtab-popup-overlay')?.remove();
 
   const overlay = document.createElement('div');
@@ -978,7 +998,7 @@ function showNewTabPopup(defaultName, defaultConfigDir, onCreate) {
         <input type="text" class="newtab-popup-input" value="${escapeHtml(defaultName)}" spellcheck="false" autocomplete="off">
         <label class="account-popup-label">Runner</label>
         <select class="account-select newtab-popup-runner">
-          ${(dashboardState.runners || []).map(r => `<option value="${r.id}">${r.icon || ''} ${escapeHtml(r.name)}</option>`).join('') || '<option value="claude">✳️ Claude</option>'}
+          ${(dashboardState.runners || []).map(r => `<option value="${r.id}" ${r.id === defaultRunnerId ? 'selected' : ''}>${r.icon || ''} ${escapeHtml(r.name)}</option>`).join('') || '<option value="claude">✳️ Claude</option>'}
         </select>
         <label class="account-popup-label newtab-account-label">Claude account</label>
         <select class="account-select newtab-popup-account">${buildAccountOptions(defaultConfigDir)}</select>
@@ -1424,8 +1444,47 @@ window.itermSendPinnedPrompt = async function(promptId, isGlobal) {
     const wrapped = window.applyPromptWrappers ? window.applyPromptWrappers(prompt.content) : prompt.content;
     await WriteITermTextBySessionID(targetSession, wrapped, true);
     await IncrementPromptUsage(state.activeProject?.id, promptId, isGlobal);
+    noteLastUsedPrompt(prompt);
   } catch (err) {
     console.error('Failed to send pinned prompt:', err);
+  }
+};
+
+// The most recently used prompt (popup or ☰ menu) sits as a one-click
+// button next to the prompts icon; persisted so it survives restarts
+function getLastUsedPrompt() {
+  try {
+    const p = JSON.parse(localStorage.getItem('termLastPrompt') || 'null');
+    return p && p.content ? p : null;
+  } catch (err) {
+    console.warn('last prompt parse failed:', err);
+    return null;
+  }
+}
+
+function noteLastUsedPrompt(p) {
+  try {
+    localStorage.setItem('termLastPrompt', JSON.stringify({
+      id: p.id, isGlobal: !!p.isGlobal, title: p.title, content: p.content,
+    }));
+  } catch (err) {
+    console.warn('last prompt save failed:', err);
+  }
+  if (isDashboardVisible()) renderTerminalDashboard();
+}
+window.termNoteLastPrompt = noteLastUsedPrompt;
+
+window.itermSendLastPrompt = async function() {
+  const last = getLastUsedPrompt();
+  const targetSession = dashboardState.viewingSessionId;
+  if (!last || !targetSession) return;
+  try {
+    const wrapped = window.applyPromptWrappers ? window.applyPromptWrappers(last.content) : last.content;
+    await WriteITermTextBySessionID(targetSession, wrapped, true);
+    IncrementPromptUsage(state.activeProject?.id || '', last.id, last.isGlobal)
+      .catch((err) => console.warn('prompt usage increment failed:', err));
+  } catch (err) {
+    console.error('Failed to send last prompt:', err);
   }
 };
 
@@ -1791,6 +1850,7 @@ const DASHBOARD_ACTIONS = {
   itermSelectProject: (n) => window.itermSelectProject(n),
   itermSendKey: (k) => window.itermSendKey(k),
   itermSendPinnedPrompt: (id, isGlobal) => window.itermSendPinnedPrompt(id, isGlobal),
+  itermSendLastPrompt: () => window.itermSendLastPrompt(),
   itermTogglePromptsPopup: () => window.itermTogglePromptsPopup(),
   itermJumpProject: (n, e) => window.itermJumpProject(n, e),
   itermSendQueued: (id) => window.itermSendQueued(id),
@@ -1910,6 +1970,17 @@ export function initTerminalDashboard() {
     .catch(err => console.warn('terminal runners unavailable:', err));
   GetRunners().then(r => { dashboardState.runners = r || []; })
     .catch(err => console.warn('runners unavailable:', err));
+  GetDefaultRunner().then(id => { dashboardState.defaultRunner = id || ''; })
+    .catch(err => console.warn('default runner unavailable:', err));
+  try {
+    const saved = JSON.parse(localStorage.getItem('termViewSize') || 'null');
+    if (saved?.cols && saved?.rows) {
+      lastSentViewSize = { cols: saved.cols, rows: saved.rows };
+      SetTermViewSize(saved.cols, saved.rows).catch(err => console.warn('term view size restore failed:', err));
+    }
+  } catch (err) {
+    console.warn('term view size restore failed:', err);
+  }
   CheckDependencies().then(d => {
     dashboardState.deps = d || [];
     if (isDashboardVisible()) renderTerminalDashboard();
@@ -2126,7 +2197,7 @@ function updateStyledOutputViewer() {
       const bgIsDefault = !run.bg || colorsMatch(run.bg, defaultBg);
 
       if (run.inv) {
-        const theme = getThemeByName(dashboardState.currentTheme);
+        const theme = viewerPalette();
         if (fgIsDefault && bgIsDefault) {
           style += `color:${theme.background};background-color:${theme.foreground};`;
         } else {
@@ -2256,12 +2327,30 @@ function colorsMatch(a, b) {
   return a.toLowerCase() === b.toLowerCase();
 }
 
+function viewingUsesAppTheme() {
+  const sid = dashboardState.viewingSessionId;
+  if (!sid) return true;
+  const runnerId = dashboardState.terminalRunners[sid];
+  return !runnerId || runnerId === 'claude';
+}
+
+function viewerPalette() {
+  if (viewingUsesAppTheme()) {
+    const theme = getThemeByName(dashboardState.currentTheme);
+    return { background: theme.background, foreground: theme.foreground };
+  }
+  return {
+    background: dashboardState.profileColors?.bg || '#000000',
+    foreground: dashboardState.profileColors?.fg || '#c7c7c7',
+  };
+}
+
 function applyCurrentTheme() {
   const viewer = document.getElementById('itermOutputViewer');
   if (!viewer) return;
-  const theme = getThemeByName(dashboardState.currentTheme);
-  viewer.style.backgroundColor = theme.background;
-  viewer.style.color = theme.foreground;
+  const palette = viewerPalette();
+  viewer.style.backgroundColor = palette.background;
+  viewer.style.color = palette.foreground;
 }
 
 function applyFontSize() {
@@ -2281,30 +2370,35 @@ function syncTermViewSize() {
 
 function sendTermViewSize() {
   const viewer = document.getElementById('itermOutputViewer');
-  if (!viewer || !dashboardState.viewingSessionId) return;
+  if (!viewer) return;
   if (!viewer.clientWidth || !viewer.clientHeight) return;
   const cs = getComputedStyle(viewer);
   const probe = document.createElement('span');
   probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
-  probe.textContent = 'M'.repeat(100);
   viewer.appendChild(probe);
-  const charW = probe.getBoundingClientRect().width / 100;
+  probe.textContent = 'M'.repeat(100);
+  const asciiW = probe.getBoundingClientRect().width / 100;
+  probe.textContent = '─'.repeat(100);
+  const boxW = probe.getBoundingClientRect().width / 100;
   probe.remove();
+  const charW = Math.max(asciiW, boxW);
   const lineH = parseFloat(cs.lineHeight) || dashboardState.fontSize * 1.35;
   if (!charW || !lineH) return;
   const innerW = viewer.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
   const innerH = viewer.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-  const cols = Math.min(400, Math.max(40, Math.floor(innerW / charW)));
+  // -1: subpixel rounding + the scrollbar appearing after first paint used
+  // to make a fullscreen TUI wrap its full-width box-drawing lines.
+  const cols = Math.min(400, Math.max(40, Math.floor(innerW / charW) - 1));
   const rows = Math.min(200, Math.max(10, Math.floor(innerH / lineH)));
   if (lastSentViewSize && lastSentViewSize.cols === cols && lastSentViewSize.rows === rows) return;
   lastSentViewSize = { cols, rows };
+  try { localStorage.setItem('termViewSize', JSON.stringify(lastSentViewSize)); } catch (err) {
+    console.warn('term view size persist failed:', err);
+  }
   SetTermViewSize(cols, rows).catch(err => console.warn('term view size sync failed:', err));
 }
 
 function applyProfileColors() {
-  const viewer = document.getElementById('itermOutputViewer');
-  if (!viewer) return;
-  // Theme takes priority over profile colors
   applyCurrentTheme();
 }
 

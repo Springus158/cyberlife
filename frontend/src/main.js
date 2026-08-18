@@ -495,6 +495,11 @@ function render() {
             </div>
           </div>
           <div class="form-group">
+            <label>Default runner</label>
+            <select id="editDefaultRunner" class="account-select"></select>
+            <span class="form-hint">New Term sessions in this project. Empty inherits the global default (Settings → Runners).</span>
+          </div>
+          <div class="form-group">
             <label>Claude account</label>
             <select id="editClaudeConfigDir" class="account-select"></select>
             <span class="form-hint">Default account used for terminals in this project</span>

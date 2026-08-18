@@ -190,6 +190,10 @@ export function GetDefaultIcons() {
   return window['go']['main']['App']['GetDefaultIcons']();
 }
 
+export function GetDefaultRunner() {
+  return window['go']['main']['App']['GetDefaultRunner']();
+}
+
 export function GetElevenLabsAPIKey() {
   return window['go']['main']['App']['GetElevenLabsAPIKey']();
 }
@@ -616,6 +620,10 @@ export function SetClaudeAccounts(arg1) {
 
 export function SetDashboardFullscreen(arg1) {
   return window['go']['main']['App']['SetDashboardFullscreen'](arg1);
+}
+
+export function SetDefaultRunner(arg1) {
+  return window['go']['main']['App']['SetDefaultRunner'](arg1);
 }
 
 export function SetElevenLabsAPIKey(arg1) {

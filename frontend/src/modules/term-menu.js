@@ -42,6 +42,7 @@ async function loadMenuData() {
 function sendPrompt(p) {
   closeTermMenu();
   window.itermSendText?.(p.content);
+  window.termNoteLastPrompt?.(p);
   IncrementPromptUsage(state.activeProject?.id || '', p.id, p.isGlobal)
     .catch((err) => console.warn('prompt usage increment failed:', err));
 }

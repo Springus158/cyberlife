@@ -5852,6 +5852,15 @@ body.wails-fullscreen .titlebar-drag-region {
 .widget-claude-badge.waiting { color: var(--warning, #f9e2af); }
 .widget-claude-badge.idle { color: var(--text-muted); font-weight: 400; }
 
+/* Sized so "commit & push" just fits; anything longer gets the ellipsis */
+.term-last-prompt-btn {
+  max-width: 122px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* Reuses the claude-dot-* status colors/pulse from the project bar */
 .term-tab-claude-dot {
   display: inline-block;
@@ -7126,7 +7135,7 @@ body.wails-fullscreen .titlebar-drag-region {
       flex: 1;
       min-height: 0;
       overflow-y: auto;
-      overflow-x: auto;
+      overflow-x: hidden;
       margin: 0;
       padding: 8px 12px;
       background: #000000;
@@ -7149,6 +7158,7 @@ body.wails-fullscreen .titlebar-drag-region {
     .term-line {
       min-height: 1.35em;
       white-space: pre;
+      overflow: hidden;
       -webkit-user-select: text;
       user-select: text;
     }

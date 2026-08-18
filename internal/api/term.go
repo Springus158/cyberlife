@@ -145,7 +145,7 @@ func (s *Server) termTools() []mcpTool {
 		},
 		{
 			Name:        "term_create",
-			Description: "Launch a new agent session (tmux) in a project or directory; runner omitted = the default Claude; prompt is passed on the CLI. Returns the session id.",
+			Description: "Launch a new agent session (tmux) in a project or directory; runner omitted = the project's default runner, else the global default, else Claude; prompt is passed on the CLI. Returns the session id.",
 			InputSchema: objSchema(nil, map[string]any{
 				"project": projectProp,
 				"workDir": map[string]any{"type": "string", "description": "Overrides the project path"},

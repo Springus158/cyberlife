@@ -3,6 +3,7 @@ package state
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -82,9 +83,92 @@ func (m *Manager) DeleteRunner(id string) error {
 		}
 	}
 	m.state.Runners = runners
+	if m.state.DefaultRunner == id {
+		m.state.DefaultRunner = ""
+	}
+	for _, p := range m.state.Projects {
+		if p != nil && p.DefaultRunner == id {
+			p.DefaultRunner = ""
+		}
+	}
+	for sid, rid := range m.state.TerminalRunners {
+		if rid == id {
+			delete(m.state.TerminalRunners, sid)
+		}
+	}
 	m.mu.Unlock()
 	m.Save()
 	return nil
+}
+
+func (m *Manager) GetDefaultRunner() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.state.DefaultRunner
+}
+
+func (m *Manager) SetDefaultRunner(id string) error {
+	id = strings.TrimSpace(id)
+	if id == ClaudeRunnerID {
+		id = ""
+	}
+	if id != "" && !m.runnerKnown(id) {
+		return fmt.Errorf("unknown runner")
+	}
+	m.mu.Lock()
+	m.state.DefaultRunner = id
+	m.mu.Unlock()
+	m.Save()
+	return nil
+}
+
+// ResolveDefaultRunner is project override → global default → Claude.
+func (m *Manager) ResolveDefaultRunner(projectID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.resolveDefaultRunnerLocked(projectID)
+}
+
+// ResolveDefaultRunnerForPath looks up the project that owns workDir, then
+// resolves the default the same way a new Term tab would.
+func (m *Manager) ResolveDefaultRunnerForPath(workDir string) string {
+	if p, ok := m.ResolveProject(workDir); ok {
+		return m.ResolveDefaultRunner(p.ID)
+	}
+	return m.ResolveDefaultRunner("")
+}
+
+func (m *Manager) resolveDefaultRunnerLocked(projectID string) string {
+	if projectID != "" {
+		if p := m.state.Projects[projectID]; p != nil && m.runnerKnownLocked(p.DefaultRunner) {
+			return p.DefaultRunner
+		}
+	}
+	if m.runnerKnownLocked(m.state.DefaultRunner) {
+		return m.state.DefaultRunner
+	}
+	return ClaudeRunnerID
+}
+
+func (m *Manager) runnerKnown(id string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.runnerKnownLocked(id)
+}
+
+func (m *Manager) runnerKnownLocked(id string) bool {
+	if id == "" {
+		return false
+	}
+	if id == ClaudeRunnerID {
+		return true
+	}
+	for _, r := range m.state.Runners {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) GetTerminalRunners() map[string]string {

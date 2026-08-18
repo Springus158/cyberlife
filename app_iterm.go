@@ -87,11 +87,14 @@ func (a *App) CreateITermTab(workingDir, tabName, claudeConfigDir string) error 
 	return a.CreateITermTabWithRunner(workingDir, tabName, claudeConfigDir, "")
 }
 
-// CreateITermTabWithRunner launches a session with the chosen runner; empty
-// or "claude" keeps the built-in default (with optional account config dir)
+// CreateITermTabWithRunner launches a session with the chosen runner. Empty
+// runnerID resolves project → global default → Claude.
 func (a *App) CreateITermTabWithRunner(workingDir, tabName, claudeConfigDir, runnerID string) error {
 	if a.itermController == nil {
 		return fmt.Errorf("iTerm controller not initialized")
+	}
+	if runnerID == "" && a.stateManager != nil {
+		runnerID = a.stateManager.ResolveDefaultRunnerForPath(workingDir)
 	}
 	if runnerID == "" || runnerID == state.ClaudeRunnerID {
 		return a.itermController.CreateTab(workingDir, tabName, claudeConfigDir, "")

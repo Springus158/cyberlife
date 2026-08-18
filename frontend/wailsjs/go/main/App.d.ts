@@ -103,6 +103,8 @@ export function GetDefaultColors():Promise<Array<string>>;
 
 export function GetDefaultIcons():Promise<Array<string>>;
 
+export function GetDefaultRunner():Promise<string>;
+
 export function GetElevenLabsAPIKey():Promise<string>;
 
 export function GetGitChangedFiles(arg1:string):Promise<Array<git.ChangedFile>>;
@@ -316,6 +318,8 @@ export function SetAutomationRuleEnabled(arg1:string,arg2:boolean):Promise<void>
 export function SetClaudeAccounts(arg1:Array<state.ClaudeAccount>):Promise<void>;
 
 export function SetDashboardFullscreen(arg1:boolean):Promise<void>;
+
+export function SetDefaultRunner(arg1:string):Promise<void>;
 
 export function SetElevenLabsAPIKey(arg1:string):Promise<void>;
 

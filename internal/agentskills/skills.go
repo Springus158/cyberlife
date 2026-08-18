@@ -247,7 +247,8 @@ Fallback: the REST API below.
 ## Actions
 
 - run-agent {runner?, prompt, workDir?} — launch an agent session; runner
-  omitted = the default Claude; workDir omitted = the rule's project path
+  omitted = the project/global default runner; workDir omitted = the
+  rule's project path
 - move-task {column} — move the triggering task (task-status rules only)
 - comment {text} — comment on the triggering task
 - notify {title?, message} — desktop notification
@@ -305,7 +306,8 @@ REST fallback (base %s): GET /api/term, POST /api/term/create|read|send|close.
 
 1. term_list — running sessions with paths and owning projects
 2. term_create {project|workDir, name?, runner?, prompt?} — spawn; the
-   prompt is passed on the runner's CLI; returns the session id
+   prompt is passed on the runner's CLI; runner omitted uses the
+   project/global default; returns the session id
 3. term_read {session, lines?} — plain-text tail of the session output
 4. term_send {session, text, enter?} — type into a session
 5. term_close {session} — kill a session
@@ -333,7 +335,8 @@ REST fallback (base %s): POST /api/projects/create|update|active|groups|groups/s
 ## Tools
 
 1. projects_create {name, path} — path must be an absolute existing dir
-2. projects_update {project, name?, color?, icon?, pinned?, group?}
+2. projects_update {project, name?, color?, icon?, pinned?, group?, runner?}
+   — runner is the default Term runner id (empty = inherit global)
 3. projects_set_active {project} — switches what the user is looking at
 4. projects_groups / projects_save_group {name, icon?, groupId?}
 

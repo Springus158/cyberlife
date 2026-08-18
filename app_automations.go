@@ -19,6 +19,9 @@ func (a *App) automationRunAgent(workDir, tabName, runnerID, prompt string) (str
 	if a.itermController == nil || a.stateManager == nil {
 		return "", fmt.Errorf("app not fully initialized")
 	}
+	if runnerID == "" {
+		runnerID = a.stateManager.ResolveDefaultRunnerForPath(workDir)
+	}
 	runner := a.stateManager.GetRunner(runnerID)
 	command := strings.TrimSpace(runner.Command)
 	if runner.Args != "" {

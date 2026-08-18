@@ -47,6 +47,16 @@ func findTmuxPath() string {
 	return tmuxPath
 }
 
+func (c *Controller) sessionGridSize() (cols, rows int) {
+	c.tmuxMu.Lock()
+	cols, rows = c.tmuxViewCols, c.tmuxViewRows
+	c.tmuxMu.Unlock()
+	if cols == 0 {
+		return tmuxControlCols, tmuxControlRows
+	}
+	return cols, rows
+}
+
 func tmuxExec(args ...string) (string, error) {
 	bin := findTmuxPath()
 	if bin == "" {
@@ -258,11 +268,16 @@ func (c *Controller) ensureTmuxSession(name, workingDir string, env map[string]s
 	// would let a quote inside a prompt break out and execute. tmux execs argv
 	// directly, so the shell replaces the pane process without an `exec` builtin.
 	inner := []string{shell, "-lic", runnerCmd}
+	cols, rows := c.sessionGridSize()
 	// history-limit must be in place before the pane exists (it's fixed at pane
 	// creation) and a bare set-option won't start the server, hence one command
-	// sequence: set the option, then create the session
+	// sequence: set the option, then create the session at the dashboard's
+	// character grid so a fullscreen TUI never paints at 80x24 / 200x50 and
+	// wraps when the real size arrives.
 	args := []string{"set-option", "-g", "history-limit", "50000", ";",
-		"new-session", "-d", "-s", name, "-c", workingDir}
+		"new-session", "-d",
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows),
+		"-s", name, "-c", workingDir}
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
 	}

@@ -278,6 +278,7 @@ func (m *Manager) UpdateProject(project *ProjectState) error {
 		existing.Pinned = project.Pinned
 		existing.GroupID = project.GroupID
 		existing.ClaudeConfigDir = project.ClaudeConfigDir
+		existing.DefaultRunner = project.DefaultRunner
 		existing.EnvVars = project.EnvVars
 		existing.Notes = project.Notes
 	}

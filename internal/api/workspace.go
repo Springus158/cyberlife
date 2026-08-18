@@ -21,14 +21,15 @@ func (s *Server) promptsEnabled() bool  { return s.groupEnabled("prompts") }
 func (s *Server) systemEnabled() bool   { return s.groupEnabled("system") }
 
 type workspaceRequest struct {
-	Project string `json:"project,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Path    string `json:"path,omitempty"`
-	Color   string `json:"color,omitempty"`
-	Icon    string `json:"icon,omitempty"`
-	Group   string `json:"group,omitempty"`
-	Pinned  *bool  `json:"pinned,omitempty"`
-	GroupID string `json:"groupId,omitempty"`
+	Project string  `json:"project,omitempty"`
+	Name    string  `json:"name,omitempty"`
+	Path    string  `json:"path,omitempty"`
+	Color   string  `json:"color,omitempty"`
+	Icon    string  `json:"icon,omitempty"`
+	Group   string  `json:"group,omitempty"`
+	Pinned  *bool   `json:"pinned,omitempty"`
+	GroupID string  `json:"groupId,omitempty"`
+	Runner  *string `json:"runner,omitempty"`
 	// tasks
 	TaskID       string   `json:"taskId,omitempty"`
 	JiraKey      string   `json:"jiraKey,omitempty"`
@@ -86,6 +87,9 @@ func (s *Server) opProjectsUpdate(req workspaceRequest) (any, error) {
 			return nil, fmt.Errorf("group %q not found", req.Group)
 		}
 		updated.GroupID = group.ID
+	}
+	if req.Runner != nil {
+		updated.DefaultRunner = strings.TrimSpace(*req.Runner)
 	}
 	if err := s.manager.UpdateProject(&updated); err != nil {
 		return nil, err
@@ -352,6 +356,10 @@ func (s *Server) opSystemInfo() (any, error) {
 			"builtIn": r.BuiltIn, "envKeys": envKeys,
 		})
 	}
+	defaultRunner := s.manager.GetDefaultRunner()
+	if defaultRunner == "" {
+		defaultRunner = "claude"
+	}
 
 	skillStates := map[string]bool{}
 	settings := s.manager.GetAgentSkills()
@@ -360,15 +368,19 @@ func (s *Server) opSystemInfo() (any, error) {
 	}
 
 	info := map[string]any{
-		"app":      "Cyber Life",
-		"apiBase":  Base(),
-		"mcp":      Base() + "/mcp",
-		"projects": len(s.manager.GetProjects()),
-		"runners":  runners,
-		"skills":   skillStates,
+		"app":           "Cyber Life",
+		"apiBase":       Base(),
+		"mcp":           Base() + "/mcp",
+		"projects":      len(s.manager.GetProjects()),
+		"runners":       runners,
+		"defaultRunner": defaultRunner,
+		"skills":        skillStates,
 	}
 	if project := s.manager.GetProject(s.manager.GetActiveProjectID()); project != nil {
-		info["activeProject"] = map[string]string{"id": project.ID, "name": project.Name, "path": project.Path}
+		info["activeProject"] = map[string]string{
+			"id": project.ID, "name": project.Name, "path": project.Path,
+			"defaultRunner": s.manager.ResolveDefaultRunner(project.ID),
+		}
 	}
 	if s.dependencies != nil {
 		info["dependencies"] = s.dependencies()
@@ -402,10 +414,11 @@ func (s *Server) projectsTools() []mcpTool {
 		},
 		{
 			Name:        "projects_update",
-			Description: "Update project fields: name, color (hex), icon (emoji), pinned, group (name or id)",
+			Description: "Update project fields: name, color (hex), icon (emoji), pinned, group (name or id), runner (default runner id for new Term sessions; empty inherits the global default)",
 			InputSchema: objSchema([]string{"project"}, map[string]any{
 				"project": projectProp, "name": nameProp, "color": nameProp,
 				"icon": nameProp, "pinned": map[string]any{"type": "boolean"}, "group": nameProp,
+				"runner": nameProp,
 			}),
 		},
 		{
@@ -507,7 +520,7 @@ func (s *Server) systemTools() []mcpTool {
 	return []mcpTool{
 		{
 			Name:        "system_info",
-			Description: "App overview: active project, runners (ids for term_create/automations; env values hidden), skill permission states, dependency health, API endpoints",
+			Description: "App overview: active project, runners (ids for term_create/automations; env values hidden), defaultRunner, skill permission states, dependency health, API endpoints",
 			InputSchema: objSchema(nil, map[string]any{}),
 		},
 	}

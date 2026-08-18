@@ -1,13 +1,37 @@
 // Projects module - workspace info and project management
 
 import { state } from './state.js';
-import { UpdateProject, SelectDirectory } from '../../wailsjs/go/main/App';
+import { UpdateProject, SelectDirectory, GetRunners, GetDefaultRunner } from '../../wailsjs/go/main/App';
 import { switchProject } from './project-switcher.js';
 import { renderITermPanel, focusProjectTab } from './iterm-panel.js';
 import { refreshGitStatus } from './git.js';
 import { loadClaudeAccounts, buildAccountOptions, attachAccountSelect, findAccountByConfigDir } from './claude-accounts.js';
 import { buildGroupOptions } from './project-groups.js';
 import { renderTabbedIconPicker, getPickedIcon } from './icon-catalog.js';
+import { escapeHtml, escapeAttr } from './utils.js';
+
+async function fillProjectRunnerSelect(select, selectedId) {
+  if (!select) return;
+  let runners = [];
+  let globalId = '';
+  try {
+    runners = await GetRunners() || [];
+  } catch (err) {
+    console.warn('Failed to load runners:', err);
+  }
+  try {
+    globalId = await GetDefaultRunner() || '';
+  } catch (err) {
+    console.warn('Failed to load default runner:', err);
+  }
+  const global = runners.find(r => r.id === (globalId || 'claude')) || runners[0];
+  const globalLabel = global ? `${global.icon || ''} ${global.name}`.trim() : 'Claude';
+  const options = [`<option value="">Use global default (${escapeHtml(globalLabel)})</option>`];
+  for (const r of runners) {
+    options.push(`<option value="${escapeAttr(r.id)}" ${r.id === selectedId ? 'selected' : ''}>${r.icon || ''} ${escapeHtml(r.name)}</option>`);
+  }
+  select.innerHTML = options.join('');
+}
 
 // Open edit project modal
 export async function openEditProjectModal() {
@@ -29,6 +53,7 @@ export async function openEditProjectModal() {
     claudeConfigInput.innerHTML = buildAccountOptions(state.activeProject.claudeConfigDir || '');
     attachAccountSelect(claudeConfigInput);
   }
+  await fillProjectRunnerSelect(document.getElementById('editDefaultRunner'), state.activeProject.defaultRunner || '');
 
   const groupSelect = document.getElementById('editProjectGroup');
   if (groupSelect) {
@@ -105,6 +130,7 @@ export function setupEditProjectModal() {
     const name = document.getElementById('editProjectName').value;
     const path = document.getElementById('editProjectPath').value;
     const claudeConfigDir = document.getElementById('editClaudeConfigDir')?.value?.trim() || '';
+    const defaultRunner = document.getElementById('editDefaultRunner')?.value || '';
     const groupId = document.getElementById('editProjectGroup')?.value || '';
     const colorEl = document.querySelector('#editColorPicker .color-option.selected');
 
@@ -119,6 +145,7 @@ export function setupEditProjectModal() {
         color,
         icon,
         claudeConfigDir,
+        defaultRunner,
         groupId
       };
 
@@ -130,6 +157,7 @@ export function setupEditProjectModal() {
       state.activeProject.color = color;
       state.activeProject.icon = icon;
       state.activeProject.claudeConfigDir = claudeConfigDir;
+      state.activeProject.defaultRunner = defaultRunner;
       state.activeProject.groupId = groupId;
 
       // Update in projects array

@@ -829,6 +829,20 @@ func (a *App) DeleteRunner(id string) error {
 	return a.stateManager.DeleteRunner(id)
 }
 
+func (a *App) GetDefaultRunner() string {
+	if a.stateManager == nil {
+		return ""
+	}
+	return a.stateManager.GetDefaultRunner()
+}
+
+func (a *App) SetDefaultRunner(id string) error {
+	if a.stateManager == nil {
+		return fmt.Errorf("state manager not initialized")
+	}
+	return a.stateManager.SetDefaultRunner(id)
+}
+
 func (a *App) GetTerminalRunners() map[string]string {
 	if a.stateManager == nil {
 		return map[string]string{}

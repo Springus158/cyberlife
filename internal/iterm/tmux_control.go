@@ -13,9 +13,11 @@ import (
 	"github.com/kalor62/cyberlife/internal/logging"
 )
 
-// Size given to our control client when it is the only client attached;
-// without it detached tmux windows fall back to 80x24.
-const tmuxControlCols, tmuxControlRows = 200, 50
+// Size given to our control client when it is the only client attached
+// and the dashboard has not reported a view size yet. 200-wide was large
+// enough that a fullscreen TUI painted full-width box lines, then wrapped
+// them into a stacked mess once the real viewer size arrived.
+const tmuxControlCols, tmuxControlRows = 120, 36
 
 // tmuxControlWatcher keeps one `tmux -C` client attached to the watched session
 // and recaptures the pane whenever tmux reports activity, so styled content

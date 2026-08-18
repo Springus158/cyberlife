@@ -146,6 +146,9 @@ type AppState struct {
 	AgentSkills map[string]bool `json:"agentSkills,omitempty"`
 	// User-defined session runners (models/CLIs beyond the built-in Claude)
 	Runners []Runner `json:"runners,omitempty"`
+	// Default runner for new terminals when a project does not override it.
+	// Empty or "claude" = the built-in Claude runner.
+	DefaultRunner string `json:"defaultRunner,omitempty"`
 	// Runner per terminal session (sessionId -> runner ID); absent = claude
 	TerminalRunners map[string]string `json:"terminalRunners,omitempty"`
 	// User-defined health checks (always manual), shown in the library
@@ -331,6 +334,10 @@ type ProjectState struct {
 	Pinned          bool   `json:"pinned"`
 	GroupID         string `json:"groupId,omitempty"`
 	ClaudeConfigDir string `json:"claudeConfigDir,omitempty"`
+	// Default runner for new terminals in this project. Empty inherits
+	// AppState.DefaultRunner; "claude" forces the built-in even when the
+	// global default is something else.
+	DefaultRunner string `json:"defaultRunner,omitempty"`
 
 	// Tasks (worktree + resumable Claude session per work item)
 	Tasks []*TaskState `json:"tasks,omitempty"`
