@@ -1,0 +1,39 @@
+{
+  "id": "cyber-bot",
+  "name": "Cyber Bot",
+  "icon": "🤖",
+  "version": "0.1.0",
+  "description": "Grok-style chat bot for Cyber Life. Talks through a Cyber Life agent session (no external API key), is aware of your active project / board / notes, and can be summoned by other agents via the cyber-bot_ask tool.",
+  "author": "Cyber Life contributors",
+  "category": "productivity",
+  "tags": ["ai", "chat", "assistant", "grok", "agent"],
+  "entry": "main.js",
+  "permissions": ["term", "system", "projects", "board", "notes"],
+  "modules": [
+    {
+      "id": "cyber-bot.chat",
+      "label": "Cyber Bot",
+      "icon": "🤖",
+      "pages": [
+        { "id": "chat", "label": "Czat", "icon": "💬" },
+        { "id": "history", "label": "Historia", "icon": "🕑" }
+      ]
+    }
+  ],
+  "widgets": [
+    { "id": "cyber-bot.ask", "title": "Zapytaj Cyber Bota", "icon": "🤖", "description": "Szybkie pytanie do Cyber Bota", "dashboard": true }
+  ],
+  "agentTools": [
+    {
+      "name": "ask",
+      "description": "Zapytaj Cyber Bota — agenta CyberLife świadomego Twojego aktywnego projektu, boardu i notatek. Zwraca odpowiedź tekstową (markdown). Bot obsługuje jedno pytanie naraz (single-flight): jeśli jest zajęty inną odpowiedzią, rzuca błąd o zajętości — ponów po chwili.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string", "description": "Pytanie lub polecenie do bota" }
+        },
+        "required": ["message"]
+      }
+    }
+  ]
+}
