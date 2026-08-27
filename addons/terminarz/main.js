@@ -458,6 +458,42 @@ export default async function activate(cl) {
       .tz-hist-tbl td{padding:4px 8px;border-bottom:none;background:none;}
       .tz-hist-title{font-size:12px;color:var(--text-muted,#9399b2);margin:4px 0 6px;}
       .tz-expand-hint{cursor:pointer;}
+      /* calendar (3/6) */
+      .tz-cal-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+      .tz-cal-title{font-size:var(--fs-lg,16px);font-weight:700;min-width:12em;}
+      .tz-cal-nav{display:flex;gap:4px;}
+      .tz-cal-views{display:flex;gap:2px;margin-left:auto;background:var(--bg-tertiary,#313244);border:1px solid var(--border,#45475a);border-radius:8px;padding:2px;}
+      .tz-cal-views button{background:none;border:none;border-radius:6px;padding:5px 12px;color:var(--text-secondary,#bac2de);cursor:pointer;font:inherit;font-size:13px;}
+      .tz-cal-views button.active{background:var(--accent,#89b4fa);color:var(--bg-primary,#1e1e2e);font-weight:600;}
+      .tz-cal-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--border,#45475a);}
+      .tz-fchip{border:1px solid var(--border,#45475a);background:none;border-radius:999px;padding:3px 11px;font:inherit;font-size:12px;font-weight:600;color:var(--text-secondary,#bac2de);cursor:pointer;}
+      .tz-fchip.active{color:#11111b;border-color:transparent;}
+      .tz-cal-sums{padding:8px 14px;border-bottom:1px solid var(--border,#45475a);color:var(--text-secondary,#bac2de);font-size:13px;}
+      .tz-cal-sums b{color:var(--text-primary,#cdd6f4);}
+      .tz-mgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+      .tz-mgrid-head{color:var(--text-muted,#9399b2);font-size:11px;font-weight:600;text-align:center;padding:2px 0;text-transform:uppercase;}
+      .tz-mcell{border:1px solid var(--border,#45475a);border-radius:8px;min-height:84px;padding:4px;display:flex;flex-direction:column;gap:2px;cursor:pointer;min-width:0;}
+      .tz-mcell:hover{background:var(--bg-secondary,#181825);}
+      .tz-mcell.blank{border-color:transparent;cursor:default;}
+      .tz-mcell.blank:hover{background:none;}
+      .tz-dnum{font-size:12px;color:var(--text-muted,#9399b2);align-self:flex-start;padding:1px 6px;border-radius:999px;}
+      .tz-dnum.today{background:var(--accent,#89b4fa);color:var(--bg-primary,#1e1e2e);font-weight:700;}
+      .tz-pill{font-size:11px;border-radius:5px;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary,#cdd6f4);background:var(--bg-tertiary,#313244);}
+      .tz-pill.due{background:rgba(249,226,175,.18);}
+      .tz-pill.missed{background:rgba(243,139,168,.22);}
+      .tz-pill.confirmed{background:rgba(166,227,161,.16);}
+      .tz-more{font-size:11px;color:var(--text-muted,#9399b2);}
+      .tz-day-row{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--border,#45475a);}
+      .tz-ygrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;}
+      .tz-ymonth{border:1px solid var(--border,#45475a);border-radius:10px;padding:8px;cursor:pointer;}
+      .tz-ymonth:hover{background:var(--bg-secondary,#181825);}
+      .tz-ymonth h4{margin:0 0 6px;font-size:13px;text-transform:capitalize;}
+      .tz-ygrid7{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
+      .tz-ycell{height:14px;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--text-muted,#9399b2);}
+      .tz-ycell .dot{width:6px;height:6px;border-radius:50%;background:var(--accent,#89b4fa);}
+      .tz-ycell .dot.missed{background:var(--error,#f38ba8);}
+      .tz-ycell.today{outline:1px solid var(--accent,#89b4fa);border-radius:3px;}
+      .tz-ysum{margin-top:6px;font-size:12px;color:var(--text-secondary,#bac2de);}
     `;
     document.head.appendChild(s);
   }
@@ -1021,16 +1057,317 @@ export default async function activate(cl) {
     });
   }
 
-  // ------------------------------------------------------------- calendar (placeholder, task 3/6)
+  // ------------------------------------------------------------- calendar (task 3/6)
+  // View state survives re-renders; anchor is the focused date.
+  const cal = {
+    view: "month", // "day" | "month" | "year"
+    anchor: todayStr(),
+    owners: new Set(), // empty = all owners
+    category: "", // "" = all categories
+  };
+  let calEl = null;
+
+  const DOW = ["pon", "wt", "śr", "czw", "pt", "sob", "niedz"];
+  const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const shortName = (s) => (s.length > 18 ? s.slice(0, 17) + "…" : s);
+
+  function filteredObligations() {
+    return obligations().filter(
+      (o) =>
+        (!cal.owners.size || cal.owners.has(o.ownerId)) &&
+        (!cal.category || o.category === cal.category),
+    );
+  }
+
+  // Generic day items so a second kind (e.g. Google events) can join later:
+  // {kind, due, status, title, amount, ownerId, o}
+  function itemsForRange(startStr, endStr, confMap) {
+    const out = [];
+    for (const o of filteredObligations()) {
+      for (const due of occurrencesBetween(o.cycle, startStr, endStr)) {
+        out.push({
+          kind: "obligation",
+          due,
+          status: occStatus(o.id, due, confMap),
+          title: o.name,
+          amount: o.amount,
+          ownerId: o.ownerId,
+          o,
+        });
+      }
+    }
+    return out.sort((a, b) => a.due.localeCompare(b.due));
+  }
+
+  function monthRange(anchor) {
+    const d = parseDate(anchor);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    return [mkDue(y, m, 1), mkDue(y, m, 31)];
+  }
+
+  function calShift(dir) {
+    if (cal.view === "day") cal.anchor = addDays(cal.anchor, dir);
+    else if (cal.view === "month") cal.anchor = addMonths(cal.anchor, dir);
+    else cal.anchor = addMonths(cal.anchor, dir * 12);
+  }
+
+  function calTitle() {
+    const d = parseDate(cal.anchor);
+    if (cal.view === "day")
+      return `${d.getDate()} ${MONTHS_GEN[d.getMonth()]} ${d.getFullYear()}`;
+    if (cal.view === "month")
+      return `${capitalize(MONTHS[d.getMonth()])} ${d.getFullYear()}`;
+    return String(d.getFullYear());
+  }
+
+  function ownerChipsHtml() {
+    return owners()
+      .map((ow) => {
+        const active = cal.owners.has(ow.id);
+        return `<button class="tz-fchip ${active ? "active" : ""}" data-owner="${escAttr(ow.id)}"
+          ${active ? `style="background:${escAttr(ow.color)}"` : ""}>${esc(ow.name)}</button>`;
+      })
+      .join("");
+  }
+
+  function sumsBarHtml(items) {
+    if (!items.length) return "";
+    const total = items.reduce((s, it) => s + Number(it.amount || 0), 0);
+    const byOwner = new Map();
+    for (const it of items)
+      byOwner.set(
+        it.ownerId,
+        (byOwner.get(it.ownerId) || 0) + Number(it.amount || 0),
+      );
+    const parts = [...byOwner]
+      .sort((a, b) => b[1] - a[1])
+      .map(([id, sum]) => {
+        const ow = ownerById(id);
+        return `${esc(ow ? ow.name : "—")}: ${formatAmount(sum)}`;
+      });
+    return `<div class="tz-cal-sums"><b>Razem: ${formatAmount(total)}</b> · ${parts.join(" · ")}</div>`;
+  }
+
+  function monthGridHtml(confMap) {
+    const d = parseDate(cal.anchor);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const [start, end] = monthRange(cal.anchor);
+    const items = itemsForRange(start, end, confMap);
+    const byDay = new Map();
+    for (const it of items) {
+      if (!byDay.has(it.due)) byDay.set(it.due, []);
+      byDay.get(it.due).push(it);
+    }
+    const today = todayStr();
+    const firstDow = (parseDate(start).getDay() + 6) % 7; // Mon=0
+    const dim = daysInMonth(y, m);
+    let cells = DOW.map((w) => `<div class="tz-mgrid-head">${w}</div>`).join(
+      "",
+    );
+    for (let i = 0; i < firstDow; i++)
+      cells += `<div class="tz-mcell blank"></div>`;
+    for (let day = 1; day <= dim; day++) {
+      const due = mkDue(y, m, day);
+      const dayItems = byDay.get(due) || [];
+      const shown = dayItems.slice(0, dayItems.length > 3 ? 2 : 3);
+      const more = dayItems.length - shown.length;
+      cells += `<div class="tz-mcell" data-day="${escAttr(due)}" title="Pokaż dzień">
+        <span class="tz-dnum ${due === today ? "today" : ""}">${day}</span>
+        ${shown
+          .map(
+            (it) =>
+              `<span class="tz-pill ${it.status}">${esc(shortName(it.title))} · ${formatAmount(it.amount)}</span>`,
+          )
+          .join("")}
+        ${more > 0 ? `<span class="tz-more">+${more} więcej</span>` : ""}
+      </div>`;
+    }
+    return `${sumsBarHtml(items)}<div class="tz-body"><div class="tz-mgrid">${cells}</div></div>`;
+  }
+
+  function dayViewHtml(confMap) {
+    const items = itemsForRange(cal.anchor, cal.anchor, confMap);
+    if (!items.length)
+      return `<div class="tz-body"><div class="tz-empty"><div style="font-size:32px">📆</div><div>Brak płatności tego dnia.</div></div></div>`;
+    const rows = items
+      .map((it, i) => {
+        const ow = ownerById(it.ownerId);
+        const chip = ow
+          ? `<span class="tz-chip" style="background:${escAttr(ow.color)}">${esc(ow.name)}</span>`
+          : "";
+        const confirmable = it.status === "due" || it.status === "missed";
+        return `<div class="tz-day-row">
+          <div style="flex:1;min-width:0">${esc(it.title)}<div class="tz-cat">${esc(CATEGORY_LABEL[it.o.category] || "")}</div></div>
+          ${chip}
+          <span class="tz-amt">${formatAmount(it.amount)}</span>
+          <span class="tz-status ${it.status}">${STATUS_LABEL[it.status]}</span>
+          ${confirmable ? `<button class="tz-btn tz-day-confirm" data-i="${i}" style="padding:4px 10px;font-size:12px">Potwierdź</button>` : ""}
+        </div>`;
+      })
+      .join("");
+    return `<div class="tz-body">${rows}</div>`;
+  }
+
+  function yearViewHtml(confMap) {
+    const y = parseDate(cal.anchor).getFullYear();
+    const items = itemsForRange(mkDue(y, 0, 1), mkDue(y, 11, 31), confMap);
+    const byDay = new Map();
+    for (const it of items) {
+      if (!byDay.has(it.due)) byDay.set(it.due, []);
+      byDay.get(it.due).push(it);
+    }
+    const today = todayStr();
+    const minis = MONTHS.map((name, m) => {
+      const dim = daysInMonth(y, m);
+      const firstDow = (new Date(y, m, 1).getDay() + 6) % 7;
+      let cells = "";
+      for (let i = 0; i < firstDow; i++)
+        cells += `<div class="tz-ycell"></div>`;
+      let sum = 0;
+      for (let day = 1; day <= dim; day++) {
+        const due = mkDue(y, m, day);
+        const dayItems = byDay.get(due) || [];
+        sum += dayItems.reduce((s, it) => s + Number(it.amount || 0), 0);
+        const missed = dayItems.some((it) => it.status === "missed");
+        cells += `<div class="tz-ycell ${due === today ? "today" : ""}">${
+          dayItems.length
+            ? `<span class="dot ${missed ? "missed" : ""}"></span>`
+            : day
+        }</div>`;
+      }
+      return `<div class="tz-ymonth" data-month="${m}" title="Pokaż miesiąc">
+        <h4>${esc(name)}</h4>
+        <div class="tz-ygrid7">${cells}</div>
+        <div class="tz-ysum">${sum ? formatAmount(sum) : "—"}</div>
+      </div>`;
+    }).join("");
+    return `<div class="tz-body"><div class="tz-ygrid">${minis}</div></div>`;
+  }
+
   function renderCalendar(el) {
+    calEl = el;
     injectStyle();
+    const confMap = confirmationMap();
+    const body =
+      cal.view === "day"
+        ? dayViewHtml(confMap)
+        : cal.view === "year"
+          ? yearViewHtml(confMap)
+          : monthGridHtml(confMap);
+
     el.innerHTML = `
       <div class="tz-wrap">
-        <div class="tz-bar"><h2>📆 Kalendarz</h2></div>
-        <div class="tz-body">
-          <div class="tz-soon">📆<br><br>Wkrótce — widoki Dzień / Miesiąc / Rok (zadanie 3/6).</div>
+        <div class="tz-bar tz-cal-bar">
+          <h2>📆 Kalendarz</h2>
+          <div class="tz-cal-nav">
+            <button class="tz-iconbtn" id="cal-prev" title="Poprzedni okres [">‹</button>
+            <button class="tz-iconbtn" id="cal-today" title="Dziś (t)">dziś</button>
+            <button class="tz-iconbtn" id="cal-next" title="Następny okres ]">›</button>
+          </div>
+          <span class="tz-cal-title">${esc(calTitle())}</span>
+          <div class="tz-cal-views">
+            <button data-view="day" class="${cal.view === "day" ? "active" : ""}" title="d">Dzień</button>
+            <button data-view="month" class="${cal.view === "month" ? "active" : ""}" title="m">Miesiąc</button>
+            <button data-view="year" class="${cal.view === "year" ? "active" : ""}" title="r">Rok</button>
+          </div>
         </div>
+        <div class="tz-cal-filters">
+          ${ownerChipsHtml()}
+          <select class="tz-select" id="cal-cat" style="width:auto">
+            <option value="">Wszystkie kategorie</option>
+            ${CATEGORIES.map((c) => `<option value="${c.id}" ${c.id === cal.category ? "selected" : ""}>${esc(c.label)}</option>`).join("")}
+          </select>
+        </div>
+        ${body}
       </div>`;
+
+    const rerender = () => renderCalendar(el);
+    el.querySelector("#cal-prev").addEventListener("click", () => {
+      calShift(-1);
+      rerender();
+    });
+    el.querySelector("#cal-next").addEventListener("click", () => {
+      calShift(1);
+      rerender();
+    });
+    el.querySelector("#cal-today").addEventListener("click", () => {
+      cal.anchor = todayStr();
+      rerender();
+    });
+    el.querySelectorAll(".tz-cal-views button").forEach((b) =>
+      b.addEventListener("click", () => {
+        cal.view = b.getAttribute("data-view");
+        rerender();
+      }),
+    );
+    el.querySelectorAll(".tz-fchip").forEach((b) =>
+      b.addEventListener("click", () => {
+        const id = b.getAttribute("data-owner");
+        if (cal.owners.has(id)) cal.owners.delete(id);
+        else cal.owners.add(id);
+        rerender();
+      }),
+    );
+    el.querySelector("#cal-cat").addEventListener("change", (e) => {
+      cal.category = e.target.value;
+      rerender();
+    });
+    el.querySelectorAll(".tz-mcell[data-day]").forEach((c) =>
+      c.addEventListener("click", () => {
+        cal.anchor = c.getAttribute("data-day");
+        cal.view = "day";
+        rerender();
+      }),
+    );
+    el.querySelectorAll(".tz-ymonth[data-month]").forEach((c) =>
+      c.addEventListener("click", () => {
+        const d = parseDate(cal.anchor);
+        cal.anchor = mkDue(
+          d.getFullYear(),
+          Number(c.getAttribute("data-month")),
+          1,
+        );
+        cal.view = "month";
+        rerender();
+      }),
+    );
+    if (cal.view === "day") {
+      const items = itemsForRange(cal.anchor, cal.anchor, confMap);
+      el.querySelectorAll(".tz-day-confirm").forEach((b) =>
+        b.addEventListener("click", () => {
+          const it = items[Number(b.getAttribute("data-i"))];
+          if (it) openConfirmPayment(it.o, it.due, rerender);
+        }),
+      );
+    }
+  }
+
+  // Keyboard shortcuts, wzorem bankOnKey z KSeF.
+  function calOnKey(e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return false;
+    if (document.querySelector(".tz-modal-bg")) return false;
+    const tag = document.activeElement?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return false;
+    if (!calEl) return false;
+    if (e.key === "[" || e.key === "]") {
+      calShift(e.key === "[" ? -1 : 1);
+      renderCalendar(calEl);
+      return true;
+    }
+    if (e.key === "t") {
+      cal.anchor = todayStr();
+      renderCalendar(calEl);
+      return true;
+    }
+    const views = { d: "day", m: "month", r: "year" };
+    if (views[e.key]) {
+      cal.view = views[e.key];
+      renderCalendar(calEl);
+      return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------- module
@@ -1051,6 +1388,8 @@ export default async function activate(cl) {
         label: "Kalendarz",
         icon: "📆",
         render: renderCalendar,
+        onShow: () => calEl && renderCalendar(calEl),
+        onKey: (e) => calOnKey(e),
       },
     ],
   });
