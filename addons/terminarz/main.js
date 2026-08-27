@@ -1062,10 +1062,19 @@ export default async function activate(cl) {
   const cal = {
     view: "month", // "day" | "month" | "year"
     anchor: todayStr(),
+    // Day the user actually picked. Month/year navigation clamps the anchor to
+    // the target month's length, so without remembering the intent 31.01 → 28.02
+    // would stay 28.03 instead of coming back to 31.
+    dayIntent: parseDate(todayStr()).getDate(),
     owners: new Set(), // empty = all owners
     category: "", // "" = all categories
   };
   let calEl = null;
+
+  function setAnchor(s) {
+    cal.anchor = s;
+    cal.dayIntent = parseDate(s).getDate();
+  }
 
   const DOW = ["pon", "wt", "śr", "czw", "pt", "sob", "niedz"];
   const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -1085,12 +1094,14 @@ export default async function activate(cl) {
     const out = [];
     for (const o of filteredObligations()) {
       for (const due of occurrencesBetween(o.cycle, startStr, endStr)) {
+        const conf = confMap[occKey(o.id, due)];
         out.push({
           kind: "obligation",
           due,
           status: occStatus(o.id, due, confMap),
           title: o.name,
-          amount: o.amount,
+          // potwierdzona pozycja liczy się kwotą rzeczywistą, nie oczekiwaną
+          amount: conf ? conf.amount : o.amount,
           ownerId: o.ownerId,
           o,
         });
@@ -1107,9 +1118,13 @@ export default async function activate(cl) {
   }
 
   function calShift(dir) {
-    if (cal.view === "day") cal.anchor = addDays(cal.anchor, dir);
-    else if (cal.view === "month") cal.anchor = addMonths(cal.anchor, dir);
-    else cal.anchor = addMonths(cal.anchor, dir * 12);
+    if (cal.view === "day") {
+      setAnchor(addDays(cal.anchor, dir));
+      return;
+    }
+    const d = parseDate(cal.anchor);
+    const step = cal.view === "month" ? dir : dir * 12;
+    cal.anchor = mkDue(d.getFullYear(), d.getMonth() + step, cal.dayIntent);
   }
 
   function calTitle() {
@@ -1192,7 +1207,7 @@ export default async function activate(cl) {
     if (!items.length)
       return `<div class="tz-body"><div class="tz-empty"><div style="font-size:32px">📆</div><div>Brak płatności tego dnia.</div></div></div>`;
     const rows = items
-      .map((it, i) => {
+      .map((it) => {
         const ow = ownerById(it.ownerId);
         const chip = ow
           ? `<span class="tz-chip" style="background:${escAttr(ow.color)}">${esc(ow.name)}</span>`
@@ -1203,7 +1218,7 @@ export default async function activate(cl) {
           ${chip}
           <span class="tz-amt">${formatAmount(it.amount)}</span>
           <span class="tz-status ${it.status}">${STATUS_LABEL[it.status]}</span>
-          ${confirmable ? `<button class="tz-btn tz-day-confirm" data-i="${i}" style="padding:4px 10px;font-size:12px">Potwierdź</button>` : ""}
+          ${confirmable ? `<button class="tz-btn tz-day-confirm" data-key="${escAttr(occKey(it.o.id, it.due))}" style="padding:4px 10px;font-size:12px">Potwierdź</button>` : ""}
         </div>`;
       })
       .join("");
@@ -1293,7 +1308,7 @@ export default async function activate(cl) {
       rerender();
     });
     el.querySelector("#cal-today").addEventListener("click", () => {
-      cal.anchor = todayStr();
+      setAnchor(todayStr());
       rerender();
     });
     el.querySelectorAll(".tz-cal-views button").forEach((b) =>
@@ -1316,7 +1331,7 @@ export default async function activate(cl) {
     });
     el.querySelectorAll(".tz-mcell[data-day]").forEach((c) =>
       c.addEventListener("click", () => {
-        cal.anchor = c.getAttribute("data-day");
+        setAnchor(c.getAttribute("data-day"));
         cal.view = "day";
         rerender();
       }),
@@ -1333,15 +1348,15 @@ export default async function activate(cl) {
         rerender();
       }),
     );
-    if (cal.view === "day") {
-      const items = itemsForRange(cal.anchor, cal.anchor, confMap);
-      el.querySelectorAll(".tz-day-confirm").forEach((b) =>
-        b.addEventListener("click", () => {
-          const it = items[Number(b.getAttribute("data-i"))];
-          if (it) openConfirmPayment(it.o, it.due, rerender);
-        }),
-      );
-    }
+    // Bind by "oblId|due", not by position — the list is rebuilt on every
+    // render and an index could drift out from under the button.
+    el.querySelectorAll(".tz-day-confirm").forEach((b) =>
+      b.addEventListener("click", () => {
+        const [oblId, due] = b.getAttribute("data-key").split("|");
+        const o = obligations().find((x) => x.id === oblId);
+        if (o) openConfirmPayment(o, due, rerender);
+      }),
+    );
   }
 
   // Keyboard shortcuts, wzorem bankOnKey z KSeF.
@@ -1357,7 +1372,7 @@ export default async function activate(cl) {
       return true;
     }
     if (e.key === "t") {
-      cal.anchor = todayStr();
+      setAnchor(todayStr());
       renderCalendar(calEl);
       return true;
     }
