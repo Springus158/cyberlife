@@ -1,0 +1,23 @@
+{
+  "id": "terminarz",
+  "name": "Terminarz",
+  "icon": "📅",
+  "version": "0.1.0",
+  "description": "Rejestr zobowiązań cyklicznych i terminowych (ubezpieczenia, leasing, podatki, domeny, abonamenty) z przypisanym właścicielem. Fundament pod kalendarz, statusy i przypomnienia.",
+  "author": "Cyber Life contributors",
+  "category": "productivity",
+  "tags": ["finance", "payments", "calendar", "reminders"],
+  "entry": "main.js",
+  "permissions": [],
+  "modules": [
+    {
+      "id": "terminarz.main",
+      "label": "Terminarz",
+      "icon": "📅",
+      "pages": [
+        { "id": "obligations", "label": "Zobowiązania", "icon": "📋" },
+        { "id": "calendar", "label": "Kalendarz", "icon": "📆" }
+      ]
+    }
+  ]
+}
