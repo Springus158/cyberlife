@@ -137,9 +137,9 @@ export default async function activate(cl) {
     return dateStr(d);
   };
   const addMonths = (s, n) => {
+    // clamp the day so e.g. 29.02 − 12 mies. nie przeskakuje na 1.03
     const d = parseDate(s);
-    d.setMonth(d.getMonth() + n);
-    return dateStr(d);
+    return mkDue(d.getFullYear(), d.getMonth() + n, d.getDate());
   };
   // whole days from a to b (positive when b is later)
   const daysBetween = (a, b) =>
@@ -266,9 +266,11 @@ export default async function activate(cl) {
     delete cache[key];
   }
   function partKeys(prefix) {
+    // numeric suffix sort — plain .sort() would put "#10" before "#2"
+    const idx = (k) => (k.includes("#") ? Number(k.split("#")[1]) : 1);
     return Object.keys(cache)
       .filter((k) => k === prefix || k.startsWith(`${prefix}#`))
-      .sort();
+      .sort((a, b) => idx(a) - idx(b));
   }
   function owners() {
     return Array.isArray(cache[K_OWNERS]) ? cache[K_OWNERS] : [];
@@ -329,12 +331,51 @@ export default async function activate(cl) {
       confirmations().filter((c) => !c.k.startsWith(`${oblId}|`)),
     );
   }
+  // After a cycle edit the generated due dates shift, which would orphan
+  // existing confirmations (paid periods would show up as "missed"). Re-key
+  // each orphan to the nearest newly generated occurrence; drop it when no
+  // occurrence lands within REMAP_MAX_DAYS (its period no longer exists).
+  const REMAP_MAX_DAYS = 45;
+  async function reconcileConfirmations(o) {
+    const valid = occurrencesBetween(
+      o.cycle,
+      windowStart(o),
+      addMonths(todayStr(), 13),
+    );
+    const validSet = new Set(valid);
+    const keyed = new Map(confirmations().map((c) => [c.k, c]));
+    let changed = false;
+    for (const [k, c] of [...keyed]) {
+      if (!k.startsWith(`${o.id}|`)) continue;
+      const due = k.slice(o.id.length + 1);
+      if (validSet.has(due)) continue;
+      changed = true;
+      keyed.delete(k);
+      let best = null;
+      let bestDist = Infinity;
+      for (const d of valid) {
+        const dist = Math.abs(daysBetween(due, d));
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = d;
+        }
+      }
+      if (best != null && bestDist <= REMAP_MAX_DAYS) {
+        const nk = occKey(o.id, best);
+        if (!keyed.has(nk)) keyed.set(nk, { ...c, k: nk });
+      }
+    }
+    if (changed) await saveChunked(K_CONF, [...keyed.values()]);
+  }
   async function upsertObligation(rec) {
     const list = obligations();
     const i = list.findIndex((o) => o.id === rec.id);
+    const prev = i >= 0 ? list[i] : null;
     if (i >= 0) list[i] = rec;
     else list.push(rec);
     await saveObligations(list);
+    if (prev && JSON.stringify(prev.cycle) !== JSON.stringify(rec.cycle))
+      await reconcileConfirmations(rec);
   }
   async function removeObligation(id) {
     await saveObligations(obligations().filter((o) => o.id !== id));
@@ -466,7 +507,7 @@ export default async function activate(cl) {
     function cycleFields() {
       const c = f.cycle;
       const dayInput = (val) =>
-        `<label class="tz-field"><span>Dzień miesiąca (1–31)</span><input class="tz-input" id="f-day" type="number" min="1" max="31" value="${escAttr(val ?? 1)}"></label>`;
+        `<label class="tz-field"><span>Dzień miesiąca (1–31)</span><input class="tz-input" id="f-day" type="number" min="1" max="31" value="${escAttr(val ?? 1)}"><div class="tz-err" id="err-day" style="display:none"></div></label>`;
       if (c.type === "monthly") return dayInput(c.day);
       if (c.type === "quarterly") return dayInput(c.day);
       if (c.type === "yearly")
@@ -492,7 +533,7 @@ export default async function activate(cl) {
       modal.innerHTML = `
         <h3>${editing ? "Edytuj zobowiązanie" : "Nowe zobowiązanie"}</h3>
         <label class="tz-field"><span>Nazwa *</span>
-          <input class="tz-input" id="f-name" type="text" value="${escAttr(f.name)}" placeholder="np. Leasing Stellantis">
+          <input class="tz-input" id="f-name" type="text" maxlength="120" value="${escAttr(f.name)}" placeholder="np. Leasing Stellantis">
           <div class="tz-err" id="err-name" style="display:none"></div>
         </label>
         <div class="tz-row2">
@@ -528,7 +569,7 @@ export default async function activate(cl) {
         </label>
         <div id="cycle-fields">${cycleFields()}</div>
         <label class="tz-field"><span>Wzorzec z wyciągu (opcjonalnie)</span>
-          <input class="tz-input" id="f-pattern" type="text" value="${escAttr(f.statementPattern || "")}" placeholder="fragment tytułu przelewu">
+          <input class="tz-input" id="f-pattern" type="text" maxlength="200" value="${escAttr(f.statementPattern || "")}" placeholder="fragment tytułu przelewu">
         </label>
         <div class="tz-row2">
           <label class="tz-field"><span>Koniec umowy (opcjonalnie)</span>
@@ -537,7 +578,7 @@ export default async function activate(cl) {
           </label>
         </div>
         <label class="tz-field"><span>Notatka (opcjonalnie)</span>
-          <textarea class="tz-ta" id="f-note">${esc(f.note || "")}</textarea>
+          <textarea class="tz-ta" id="f-note" maxlength="2000">${esc(f.note || "")}</textarea>
         </label>
         <div class="tz-modal-actions">
           <button class="tz-btn ghost" id="f-cancel">Anuluj</button>
@@ -653,6 +694,15 @@ export default async function activate(cl) {
         showErr("#err-months", "Zaznacz co najmniej jeden miesiąc rat");
         ok = false;
       }
+      if (f.cycle.type !== "onetime") {
+        // pusty input → Number("") === 0 → new Date(y, m, 0) cofa termin
+        // o miesiąc; bez tej walidacji zapis przesunąłby wszystkie terminy
+        const d = Number(f.cycle.day);
+        if (!Number.isInteger(d) || d < 1 || d > 31) {
+          showErr("#err-day", "Dzień miesiąca musi być liczbą od 1 do 31");
+          ok = false;
+        }
+      }
       const endVal = (f.contractEnd || "").trim();
       if (endVal && !/^\d{4}-(0[1-9]|1[0-2])$/.test(endVal)) {
         showErr("#err-end", "Format: RRRR-MM (np. 2027-01)");
@@ -752,6 +802,7 @@ export default async function activate(cl) {
         </label>
         <label class="tz-field"><span>Kwota rzeczywista (zł)</span>
           <input class="tz-input" id="p-amount" type="number" step="0.01" min="0" value="${escAttr(o.amount)}">
+          <div class="tz-err" id="p-err-amount" style="display:none"></div>
         </label>
         <div class="tz-modal-actions">
           <button class="tz-btn ghost" id="p-cancel">Anuluj</button>
@@ -784,8 +835,15 @@ export default async function activate(cl) {
         errEl.style.display = "";
         return;
       }
-      const amt = Number(bg.querySelector("#p-amount").value);
-      await addConfirmation(o.id, due, dv, amt > 0 ? amt : o.amount);
+      const rawAmt = bg.querySelector("#p-amount").value.trim();
+      const amt = rawAmt === "" ? Number(o.amount) : Number(rawAmt);
+      if (!(amt > 0)) {
+        const aErr = bg.querySelector("#p-err-amount");
+        aErr.textContent = "Kwota musi być większa od zera";
+        aErr.style.display = "";
+        return;
+      }
+      await addConfirmation(o.id, due, dv, amt);
       close();
       if (afterSave) afterSave();
     });
