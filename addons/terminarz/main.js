@@ -277,7 +277,10 @@ export default async function activate(cl) {
           </div>
           ${dayInput(c.day)}`;
       if (c.type === "onetime")
-        return `<label class="tz-field"><span>Data</span><input class="tz-input" id="f-date" type="date" value="${escAttr(c.date || "")}"></label>`;
+        // type="text" (nie "date"): WebKit2GTK na Linuksie nie ma pickera dla
+        // input[type=date]/[month] — klik nic nie robi. Tekst RRRR-MM-DD działa
+        // na obu platformach.
+        return `<label class="tz-field"><span>Data *</span><input class="tz-input" id="f-date" type="text" inputmode="numeric" placeholder="RRRR-MM-DD" value="${escAttr(c.date || "")}"><div class="tz-err" id="err-date" style="display:none"></div></label>`;
       return "";
     }
 
@@ -320,7 +323,8 @@ export default async function activate(cl) {
         </label>
         <div class="tz-row2">
           <label class="tz-field"><span>Koniec umowy (opcjonalnie)</span>
-            <input class="tz-input" id="f-end" type="month" value="${escAttr(f.contractEnd || "")}">
+            <input class="tz-input" id="f-end" type="text" inputmode="numeric" placeholder="RRRR-MM (np. 2027-01)" value="${escAttr(f.contractEnd || "")}">
+            <div class="tz-err" id="err-end" style="display:none"></div>
           </label>
         </div>
         <label class="tz-field"><span>Notatka (opcjonalnie)</span>
@@ -421,6 +425,18 @@ export default async function activate(cl) {
         showErr("#err-months", "Zaznacz co najmniej jeden miesiąc rat");
         ok = false;
       }
+      const endVal = (f.contractEnd || "").trim();
+      if (endVal && !/^\d{4}-(0[1-9]|1[0-2])$/.test(endVal)) {
+        showErr("#err-end", "Format: RRRR-MM (np. 2027-01)");
+        ok = false;
+      }
+      if (f.cycle.type === "onetime") {
+        const dv = (f.cycle.date || "").trim();
+        if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(dv)) {
+          showErr("#err-date", "Podaj datę w formacie RRRR-MM-DD");
+          ok = false;
+        }
+      }
       if (!ok) return;
 
       const rec = {
@@ -432,7 +448,7 @@ export default async function activate(cl) {
         tolerancePct: Number(f.tolerancePct) || 0,
         cycle: f.cycle,
         statementPattern: (f.statementPattern || "").trim(),
-        contractEnd: f.contractEnd || "",
+        contractEnd: (f.contractEnd || "").trim(),
         note: (f.note || "").trim(),
       };
       await upsertObligation(rec);
