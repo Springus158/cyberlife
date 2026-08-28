@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"sync"
@@ -94,7 +95,9 @@ func (m *Manager) Authorize(ctx context.Context, clientID, clientSecret string) 
 			return
 		}
 		if errMsg := q.Get("error"); errMsg != "" {
-			fmt.Fprintf(w, "<html><body style='font-family:sans-serif'><h2>Authorization failed</h2><p>%s</p></body></html>", errMsg)
+			// escaped: the value comes from the request, and this page renders
+			// in the user's browser
+			fmt.Fprintf(w, "<html><body style='font-family:sans-serif'><h2>Authorization failed</h2><p>%s</p></body></html>", html.EscapeString(errMsg))
 			errCh <- fmt.Errorf("authorization denied: %s", errMsg)
 			return
 		}

@@ -136,10 +136,15 @@ loopback port, so there is no redirect URI to register.
 Secret, then approve in the browser. Each account keeps its own credentials, so a personal
 project and a company one work side by side.
 
-**Sharing with addons:** tick the calendars an account should expose. That tick is the
-access boundary — the token can read the whole account, but `/api/calendar/*` resolves
-only ticked calendars and answers **404** for anything else. Read-only calendars are
-labelled; Google rejects writes to them.
+**Sharing with addons:** tick the calendars an account should expose. `/api/calendar/*`
+resolves only ticked calendars and answers **404** for anything else, so the REST surface
+never reaches a calendar you did not share. Read-only calendars are labelled; Google
+rejects writes to them.
+
+> Sharing scopes the **API**, not the app itself. Addons run unsandboxed in the app's own
+> JS context, so — exactly as with Gmail — a hostile addon can reach the underlying
+> bindings directly and read or re-share anything the connected account can see. Install
+> addons you trust; see [SECURITY.md](SECURITY.md).
 
 **API** (needs `"permissions": ["calendar"]` in `addon.json`):
 

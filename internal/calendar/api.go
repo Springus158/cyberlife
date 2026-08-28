@@ -110,21 +110,28 @@ func ListEvents(svc *calendarapi.Service, calendarID, from, to string) ([]Event,
 		return nil, fmt.Errorf("from (%s) is after to (%s)", from, to)
 	}
 	// Google treats timeMax as exclusive, so the last day needs a full day added
-	res, err := svc.Events.List(calendarID).
+	call := svc.Events.List(calendarID).
 		SingleEvents(true).
 		OrderBy("startTime").
 		TimeMin(start.Format(time.RFC3339)).
 		TimeMax(end.AddDate(0, 0, 1).Format(time.RFC3339)).
-		MaxResults(2500).
-		Do()
-	if err != nil {
-		return nil, notFound("calendar", err)
-	}
+		MaxResults(2500)
 	out := []Event{}
-	for _, item := range res.Items {
-		out = append(out, toEvent(item))
+	// paginate: a busy calendar in a wide window exceeds one page, and a
+	// silently truncated list would look like "nothing more is scheduled"
+	for {
+		res, err := call.Do()
+		if err != nil {
+			return nil, notFound("calendar", err)
+		}
+		for _, item := range res.Items {
+			out = append(out, toEvent(item))
+		}
+		if res.NextPageToken == "" {
+			return out, nil
+		}
+		call = call.PageToken(res.NextPageToken)
 	}
-	return out, nil
 }
 
 func CreateEvent(svc *calendarapi.Service, calendarID string, in EventInput) (*Event, error) {

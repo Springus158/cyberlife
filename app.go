@@ -100,6 +100,12 @@ func (a *App) startup(ctx context.Context) {
 		a.automationEngine.StartCron()
 		go a.pollMailForAutomations()
 
+		// Calendar manager must exist before the API server registers its hooks
+		a.calendarManager = calendar.NewManager()
+		a.calendarManager.SetTokenRefreshHandler(func(email, tokenJSON string) {
+			a.stateManager.UpdateCalendarToken(email, tokenJSON)
+		})
+
 		// Agent-facing surface: local REST+MCP API and built-in skills
 		a.apiServer = api.NewServer(a.stateManager, api.Hooks{
 			OnChange: func(projectID string) {
@@ -172,14 +178,6 @@ func (a *App) startup(ctx context.Context) {
 	if a.stateManager != nil {
 		a.gmailManager.SetTokenRefreshHandler(func(email, tokenJSON string) {
 			a.stateManager.UpdateGmailToken(email, tokenJSON)
-		})
-	}
-
-	// Initialize Google Calendar manager
-	a.calendarManager = calendar.NewManager()
-	if a.stateManager != nil {
-		a.calendarManager.SetTokenRefreshHandler(func(email, tokenJSON string) {
-			a.stateManager.UpdateCalendarToken(email, tokenJSON)
 		})
 	}
 
