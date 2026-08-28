@@ -185,11 +185,16 @@ export default async function activate(cl) {
   // Month granularity so an occurrence earlier in the creation month counts
   // (freshly added obligation with a day already past ⇒ visible as missed).
   function windowStart(o) {
-    const today = todayStr();
-    const cap = addMonths(today, -HISTORY_MONTHS);
-    const created = o.createdAt || today;
-    const monthStart = created.slice(0, 7) + "-01";
-    return monthStart > cap ? monthStart : cap;
+    const cap = addMonths(todayStr(), -HISTORY_MONTHS);
+    const start = obligationStart(o);
+    return start > cap ? start : cap;
+  }
+
+  // Uncapped lower bound: the month the obligation was created in. The history
+  // view clamps this to HISTORY_MONTHS, but "does this occurrence exist?" must
+  // not — an occurrence from two years ago is still a real occurrence.
+  function obligationStart(o) {
+    return (o.createdAt || todayStr()).slice(0, 7) + "-01";
   }
 
   const occKey = (oblId, due) => `${oblId}|${due}`;
@@ -564,12 +569,18 @@ export default async function activate(cl) {
   // ------------------------------------------------------------- suggestions (task 5/6)
   // Recurring payments an agent spotted elsewhere (bank statements). They are
   // proposals only — nothing lands in the register until the user accepts one.
+  // Chunked like obl/conf: an agent parsing statements can append repeatedly,
+  // and a single key is capped at 64KB by the host.
   function suggestions() {
-    return Array.isArray(cache[K_SUGG]) ? cache[K_SUGG] : [];
+    return partKeys(K_SUGG).flatMap((k) => cache[k] || []);
   }
   async function saveSuggestions(list) {
-    await put(K_SUGG, list);
+    await saveChunked(K_SUGG, list);
   }
+  // Same charge parsed from two statement lines differs in case, spacing and
+  // rounding — treat those as one finding instead of two rows.
+  const suggKey = (name, amount) =>
+    `${String(name).trim().toLowerCase().replace(/\s+/g, " ")}|${Number(amount || 0).toFixed(2)}`;
 
   // Free-text cycle from the agent ("monthly", "co miesiąc", "rocznie") plus
   // the last seen date is enough to prefill the form; the user corrects the rest.
@@ -579,12 +590,15 @@ export default async function activate(cl) {
       ? parseDate(s.lastSeen)
       : parseDate(todayStr());
     const day = seen.getDate();
-    if (/kwart|quarter/.test(raw)) return { type: "quarterly", day };
-    if (/rocz|year|annual/.test(raw))
+    if (/\b(kwartal|kwartaln|quarter|quarterly)/.test(raw))
+      return { type: "quarterly", day };
+    if (/\b(rocz|roczn|year|yearly|annual)/.test(raw))
       return { type: "yearly", month: seen.getMonth(), day };
-    if (/rat|install/.test(raw))
+    // jeden miesiąc rat to wszystko, co da się wywnioskować z lastSeen —
+    // resztę użytkownik zaznacza w formularzu
+    if (/\b(raty|ratach|install|installments)/.test(raw))
       return { type: "installments", months: [seen.getMonth()], day };
-    if (/jednoraz|once|onetime/.test(raw))
+    if (/\b(jednoraz|once|onetime|one-time)/.test(raw))
       return { type: "onetime", date: dateStr(seen) };
     return { type: "monthly", day };
   }
@@ -1765,6 +1779,11 @@ export default async function activate(cl) {
   // Exposed over MCP as terminarz_list / _pending / _confirm / _suggest.
   const PENDING_BACK_DAYS = 60;
   const PENDING_AHEAD_DAYS = 7;
+  const PENDING_MAX_AHEAD_MONTHS = 24; // sanity cap na okno z argumentów modelu
+  const CONFIRM_AHEAD_DAYS = 7; // ile dni „do przodu" wolno jeszcze potwierdzić
+  const MAX_SUGGESTIONS = 100;
+  const MAX_SUGG_FIELD = 200;
+  const MAX_NOTE_LEN = 2000;
 
   function resolveOwnerId(needle) {
     if (!needle) return null;
@@ -1830,6 +1849,14 @@ export default async function activate(cl) {
     const to = args.to || addDays(today, PENDING_AHEAD_DAYS);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to))
       throw new Error("from/to muszą być w formacie YYYY-MM-DD");
+    if (from > to)
+      throw new Error(`from (${from}) jest późniejsze niż to (${to})`);
+    // bez tego "to": "9999-12-31" każe przeliczać wystąpienia przez tysiące lat
+    const maxTo = addMonths(today, PENDING_MAX_AHEAD_MONTHS);
+    if (to > maxTo)
+      throw new Error(
+        `to (${to}) wykracza poza dozwolony horyzont — maksimum ${maxTo}`,
+      );
     const confMap = confirmationMap();
     const out = [];
     for (const o of obligations()) {
@@ -1859,7 +1886,8 @@ export default async function activate(cl) {
   cl.registerAgentTool("confirm", async (args = {}) => {
     const { obligationId, dueDate, paidDate } = args;
     const o = obligations().find((x) => x.id === obligationId);
-    if (!o) throw new Error("zobowiązanie nie znalezione");
+    if (!o)
+      throw new Error(`zobowiązanie nie znalezione: ${obligationId ?? "(brak id)"}`);
     for (const [label, v] of [
       ["dueDate", dueDate],
       ["paidDate", paidDate],
@@ -1867,10 +1895,12 @@ export default async function activate(cl) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")))
         throw new Error(`${label} musi być w formacie YYYY-MM-DD`);
     }
-    // dueDate must be an occurrence this obligation actually generates
+    // dueDate must be an occurrence this obligation actually generates —
+    // checked against its whole lifetime, not the 12-month history window,
+    // so rozliczanie zaległości sprzed roku nie dostaje „nie istnieje"
     const valid = occurrencesBetween(
       o.cycle,
-      windowStart(o),
+      obligationStart(o),
       addMonths(todayStr(), 13),
     );
     if (!valid.includes(dueDate))
@@ -1879,13 +1909,20 @@ export default async function activate(cl) {
       );
     if (confirmationMap()[occKey(o.id, dueDate)])
       throw new Error("wystąpienie już potwierdzone");
+    // Early payment is legitimate (the automation matches ±5 dni), a term
+    // months away is not — that would silently settle a future period.
+    const ahead = daysBetween(todayStr(), dueDate);
+    if (ahead > CONFIRM_AHEAD_DAYS)
+      throw new Error(
+        `wystąpienie ${dueDate} jeszcze nie nadeszło (termin za ${ahead} dni)`,
+      );
     const amount = Number(args.amount);
     await addConfirmation(
       o.id,
       dueDate,
       paidDate,
       amount > 0 ? amount : o.amount,
-      args.note ? String(args.note) : "",
+      args.note ? String(args.note).slice(0, MAX_NOTE_LEN) : "",
     );
     if (oblEl) renderObligations(oblEl);
     return {
@@ -1902,27 +1939,42 @@ export default async function activate(cl) {
     if (!items.length)
       throw new Error("items: podaj co najmniej jedną pozycję");
     const list = suggestions().slice();
+    const clip = (v) =>
+      String(v || "")
+        .trim()
+        .slice(0, MAX_SUGG_FIELD);
     let added = 0;
+    let skipped = 0;
     for (const it of items) {
-      const name = String(it?.name || "").trim();
+      const name = clip(it?.name);
       if (!name) continue;
-      // same name + amount already waiting for review is not a new finding
-      const amount = Number(it.amount) || 0;
-      if (list.some((s) => s.name === name && Number(s.amount) === amount))
+      if (list.length >= MAX_SUGGESTIONS) {
+        skipped++;
         continue;
+      }
+      const amount = Number(it.amount) || 0;
+      if (list.some((s) => suggKey(s.name, s.amount) === suggKey(name, amount)))
+        continue;
+      let id = "s" + Math.abs(hashStr(name + amount + list.length));
+      while (list.some((s) => s.id === id)) id += "x";
       list.push({
-        id: "s" + Math.abs(hashStr(name + amount + list.length)),
+        id,
         name,
         amount,
-        cycle: String(it.cycle || ""),
-        lastSeen: String(it.lastSeen || ""),
+        cycle: clip(it.cycle),
+        lastSeen: clip(it.lastSeen),
         at: todayStr(),
       });
       added++;
     }
     if (added) await saveSuggestions(list);
     if (oblEl) renderObligations(oblEl);
-    return { added, pending: list.length };
+    const out = { added, pending: list.length };
+    if (skipped) {
+      out.skipped = skipped;
+      out.note = `lista sugestii jest pełna (limit ${MAX_SUGGESTIONS}) — przejrzyj istniejące`;
+    }
+    return out;
   });
 
   // Reminders: once at startup, then hourly. The timer is cleared on dispose

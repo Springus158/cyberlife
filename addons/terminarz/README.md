@@ -106,8 +106,9 @@ polami, odrzucona znika.
 
 ## Dane
 
-Wszystko leży lokalnie w magazynie addonu (`cl.storage`), w kluczach
-chunkowanych pod limit 64 KB na klucz: `owners`, `obl`, `conf`, `sugg`, `sent`.
+Wszystko leży lokalnie w magazynie addonu (`cl.storage`). Listy, które rosną —
+zobowiązania (`obl`), potwierdzenia (`conf`) i sugestie (`sugg`) — są dzielone
+na części pod limit 64 KB na klucz; `owners` i `sent` są z natury małe.
 Addon nie wychodzi do sieci — jedyne uprawnienie w manifeście to `notify`,
 potrzebne do powiadomień systemowych.
 
