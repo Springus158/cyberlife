@@ -1727,7 +1727,23 @@ export default async function activate(cl) {
     if (err)
       return ` <span class="tz-gmark warn" title="${escAttr(`Nie zsynchronizowano z Google: ${err}`)}">⚠</span>`;
     if (!o.calendarId) return "";
-    return ` <span class="tz-gmark" title="${escAttr(calendarLabel(o.calendarId))}">📆</span>`;
+    // wystąpienia skasowane w Google widać przy nazwie, żeby nie trzeba było
+    // szukać ich po kalendarzu
+    const gone = Object.keys(goneEvents())
+      .filter((k) => k.startsWith(`${o.id}|`))
+      .map((k) => fmtDate(k.split("|")[1]));
+    const moved = Object.keys(shifts()).filter((k) =>
+      k.startsWith(`${o.id}|`),
+    ).length;
+    return (
+      ` <span class="tz-gmark" title="${escAttr(calendarLabel(o.calendarId))}">📆</span>` +
+      (moved
+        ? ` <span class="tz-gmark" title="${escAttr(`Terminy przesunięte w Google: ${moved}`)}">↔</span>`
+        : "") +
+      (gone.length
+        ? ` <span class="tz-gmark warn" title="${escAttr(`Event usunięty w Google: ${gone.join(", ")}`)}">⚠</span>`
+        : "")
+    );
   }
 
   function suggestionsBarHtml() {
