@@ -452,10 +452,12 @@ export default async function activate(cl) {
         const left = daysBetween(today, due);
         // Stages are ranges, not exact days — opening the app 5 days before
         // the term must still warn instead of silently skipping day 7.
+        // left < 0 = po terminie, ale wciąż w karencji: nie wolno mu wpaść
+        // w "d1", bo dostałby komunikat „Jutro" dla zaległej płatności
         let stage = null;
         if (status === "missed") stage = "missed";
-        else if (left <= 1) stage = "d1";
-        else if (left <= REMIND_AHEAD) stage = "d7";
+        else if (left >= 0 && left <= 1) stage = "d1";
+        else if (left > 1 && left <= REMIND_AHEAD) stage = "d7";
         if (!stage) continue;
         const key = `${o.id}|${due}|${stage}`;
         if (marks[key]) continue;
@@ -494,12 +496,12 @@ export default async function activate(cl) {
         sent++;
       } catch (err) {
         // brak uprawnienia "notify" albo notyfikacje niedostępne — addon ma
-        // działać dalej, więc tylko log i żadnego znacznika (spróbuje ponownie)
-        cl.log(
-          "powiadomienie odrzucone:",
-          err && err.message ? err.message : err,
-        );
-        break;
+        // działać dalej, więc tylko log i żadnego znacznika (spróbuje ponownie).
+        // Brak uprawnienia dotyczy wszystkich naraz, więc wtedy przerywamy;
+        // pojedynczy błąd notyfikatora nie blokuje pozostałych pozycji.
+        const msg = err && err.message ? err.message : String(err);
+        cl.log("powiadomienie odrzucone:", msg);
+        if (msg.includes('"notify" permission')) break;
       }
     }
     if (sent) await put(K_SENT, pruneMarks(marks));
@@ -510,7 +512,6 @@ export default async function activate(cl) {
   // Five nearest items: everything already missed first (red), then upcoming.
   function upcomingItems(limit = 5) {
     const confMap = confirmationMap();
-    const today = todayStr();
     const out = [];
     for (const o of obligations()) {
       const { past, next } = obligationOccurrences(o);
@@ -523,8 +524,7 @@ export default async function activate(cl) {
     }
     return out
       .sort((a, b) => a.sort - b.sort || a.due.localeCompare(b.due))
-      .slice(0, limit)
-      .map((it) => ({ ...it, late: daysBetween(it.due, today) }));
+      .slice(0, limit);
   }
 
   function renderUpcomingWidget(el) {
@@ -546,17 +546,14 @@ export default async function activate(cl) {
     el.onclick = () => cl.openModule("main", "obligations");
   }
 
-  // Widget instances are re-rendered by the host; a live one also refreshes
-  // itself when obligations change so confirming from the list is reflected.
-  const widgetEls = new Set();
+  // The host rebuilds widget frames on unrelated events (project switch,
+  // kanban, automations), so holding element references would pile up
+  // detached nodes. Query the live DOM instead, like refreshLiveWidgets does.
+  const WIDGET_ID = "terminarz.upcoming";
   function refreshWidgets() {
-    for (const el of [...widgetEls]) {
-      if (!el.isConnected) {
-        widgetEls.delete(el);
-        continue;
-      }
-      renderUpcomingWidget(el);
-    }
+    document
+      .querySelectorAll(`[data-widget-id="${WIDGET_ID}"] .widget-frame-body`)
+      .forEach((body) => renderUpcomingWidget(body));
   }
 
   // ------------------------------------------------------------- style
@@ -1662,10 +1659,7 @@ export default async function activate(cl) {
     title: "Nadchodzące płatności",
     icon: "📅",
     dashboard: true,
-    render(el) {
-      widgetEls.add(el);
-      renderUpcomingWidget(el);
-    },
+    render: renderUpcomingWidget,
   });
 
   await initStore();
@@ -1682,7 +1676,6 @@ export default async function activate(cl) {
   return () => {
     if (remindTimer) clearInterval(remindTimer);
     remindTimer = null;
-    widgetEls.clear();
     oblEl = null;
     calEl = null;
   };
