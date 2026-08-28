@@ -156,6 +156,10 @@ rejects writes to them.
 | `PATCH /api/calendar/events` `{calendar, event, …}` | updates the given fields |
 | `DELETE /api/calendar/events` `{calendar, event}` | removes the event |
 
+Addons reach the same three writes over POST, because the addon SDK's `cl.api()` only
+issues GET and POST: add `"op": "update"` or `"op": "delete"` to the body (omitted or
+`"create"` creates).
+
 Errors: **404** for an unknown or unshared calendar and for a missing event, **400** for
 bad arguments (no `calendar`, malformed date, `from` after `to`).
 

@@ -27,11 +27,15 @@ type CalendarHooks struct {
 type calendarEventRequest struct {
 	Calendar string `json:"calendar"`
 	Event    string `json:"event,omitempty"`
-	Title    string `json:"title,omitempty"`
-	Date     string `json:"date,omitempty"`
-	Start    string `json:"start,omitempty"`
-	End      string `json:"end,omitempty"`
-	Note     string `json:"note,omitempty"`
+	// Op lets a POST stand in for PATCH/DELETE: the addon SDK's api() can only
+	// issue GET and POST, so without it addons could create events but never
+	// change or remove them.
+	Op    string `json:"op,omitempty"`
+	Title string `json:"title,omitempty"`
+	Date  string `json:"date,omitempty"`
+	Start string `json:"start,omitempty"`
+	End   string `json:"end,omitempty"`
+	Note  string `json:"note,omitempty"`
 }
 
 func (r calendarEventRequest) input() calendar.EventInput {
@@ -66,7 +70,7 @@ func (s *Server) handleCalendarEvents(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.calendarList(w, r)
 	case http.MethodPost:
-		s.calendarWrite(w, r, "create")
+		s.calendarPost(w, r)
 	case http.MethodPatch, http.MethodPut:
 		s.calendarWrite(w, r, "update")
 	case http.MethodDelete:
@@ -104,11 +108,34 @@ func (s *Server) calendarList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// calendarPost dispatches on the body's "op" so POST covers all three writes
+func (s *Server) calendarPost(w http.ResponseWriter, r *http.Request) {
+	var probe calendarEventRequest
+	if !decodeBody(w, r, &probe) {
+		return
+	}
+	op := strings.ToLower(strings.TrimSpace(probe.Op))
+	switch op {
+	case "", "create", "update", "delete":
+	default:
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("unknown op %q (create, update or delete)", probe.Op))
+		return
+	}
+	if op == "" {
+		op = "create"
+	}
+	s.calendarWriteReq(w, probe, op)
+}
+
 func (s *Server) calendarWrite(w http.ResponseWriter, r *http.Request, op string) {
 	var req calendarEventRequest
 	if !decodeBody(w, r, &req) {
 		return
 	}
+	s.calendarWriteReq(w, req, op)
+}
+
+func (s *Server) calendarWriteReq(w http.ResponseWriter, req calendarEventRequest, op string) {
 	if strings.TrimSpace(req.Calendar) == "" {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("calendar is required"))
 		return
