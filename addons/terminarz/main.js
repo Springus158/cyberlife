@@ -771,10 +771,17 @@ export default async function activate(cl) {
     return `${confirmed ? "✓ " : ""}${o.name} — ${formatAmount(o.amount)}${who}`;
   }
 
-  // Wystąpienia, które mają istnieć w Google: od dziś przez horyzont
-  function horizonOccurrences(o) {
+  // Okno synchronizacji: horyzont w przód plus okres karencji wstecz. Bez
+  // tego wystąpienie „do potwierdzenia" sprzed dwóch dni nie miałoby
+  // odpowiednika w Google, a to właśnie te pozycje się potwierdza.
+  function gcalWindow() {
     const today = todayStr();
-    return occurrencesBetween(o.cycle, today, addMonths(today, GCAL_HORIZON_MONTHS));
+    return [addDays(today, -GRACE_DAYS), addMonths(today, GCAL_HORIZON_MONTHS)];
+  }
+
+  function horizonOccurrences(o) {
+    const [from, to] = gcalWindow();
+    return occurrencesBetween(o.cycle, from, to);
   }
 
   // Doprowadza Google do stanu zgodnego z zobowiązaniem: tworzy brakujące
@@ -816,9 +823,7 @@ export default async function activate(cl) {
       return;
     }
 
-    const today = todayStr();
-    const from = today;
-    const to = addMonths(today, GCAL_HORIZON_MONTHS);
+    const [from, to] = gcalWindow();
     const fresh = [];
     try {
       for (const calId of touched) {
@@ -894,15 +899,10 @@ export default async function activate(cl) {
       await setGcalError(oblId, "");
       return;
     }
-    const today = todayStr();
+    const [from, to] = gcalWindow();
     try {
       for (const calId of calendars) {
-        const { byDate, extra } = await existingEvents(
-          calId,
-          oblId,
-          today,
-          addMonths(today, GCAL_HORIZON_MONTHS),
-        );
+        const { byDate, extra } = await existingEvents(calId, oblId, from, to);
         for (const ev of [...byDate.values(), ...extra]) {
           await cl.api("/api/calendar/events", {
             op: "delete",
