@@ -559,11 +559,97 @@ export default async function activate(cl) {
   // The host rebuilds widget frames on unrelated events (project switch,
   // kanban, automations), so holding element references would pile up
   // detached nodes. Query the live DOM instead, like refreshLiveWidgets does.
-  const WIDGET_ID = "terminarz.upcoming";
+  const WIDGETS = [
+    { id: "terminarz.upcoming", render: (el) => renderUpcomingWidget(el) },
+    { id: "terminarz.today", render: (el) => renderTodayWidget(el) },
+    { id: "terminarz.month", render: (el) => renderMonthWidget(el) },
+  ];
   function refreshWidgets() {
-    document
-      .querySelectorAll(`[data-widget-id="${WIDGET_ID}"] .widget-frame-body`)
-      .forEach((body) => renderUpcomingWidget(body));
+    for (const w of WIDGETS) {
+      document
+        .querySelectorAll(`[data-widget-id="${w.id}"] .widget-frame-body`)
+        .forEach((body) => w.render(body));
+    }
+  }
+
+  // ----------------------------------------------------------- widgets (6/6)
+  const WEEKDAYS = [
+    "niedziela",
+    "poniedziałek",
+    "wtorek",
+    "środa",
+    "czwartek",
+    "piątek",
+    "sobota",
+  ];
+  const TODAY_WIDGET_MAX = 5;
+
+  // Both widgets jump into the calendar, so the module opens where the click
+  // suggested: a day cell lands on that day, the frame itself on the month.
+  function openCalendar(view, anchor) {
+    cal.view = view;
+    if (anchor) setAnchor(anchor);
+    cl.openModule("main", "calendar");
+    if (calEl) renderCalendar(calEl);
+  }
+
+  function renderTodayWidget(el) {
+    injectStyle();
+    const today = todayStr();
+    const d = parseDate(today);
+    const heading = `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS_GEN[d.getMonth()]}`;
+    const items = itemsForRange(today, today, confirmationMap());
+    const shown = items.slice(0, TODAY_WIDGET_MAX);
+    const more = items.length - shown.length;
+    el.innerHTML = `<div class="tz-today">
+      <div class="tz-today-date">${esc(heading)}</div>
+      ${
+        items.length
+          ? shown
+              .map((it) => {
+                const ow = ownerById(it.ownerId);
+                return `<div class="tz-widget-row ${it.status}">
+                  <span class="tz-w-name" title="${escAttr(it.title)}">${esc(it.title)}</span>
+                  ${ow ? `<span class="tz-chip" style="background:${escAttr(ow.color)}">${esc(ow.name)}</span>` : ""}
+                  <span class="tz-amt">${formatAmount(it.amount)}</span>
+                </div>`;
+              })
+              .join("") +
+            (more > 0 ? `<div class="tz-more">+${more} więcej</div>` : "")
+          : `<div class="widget-empty">Nic na dziś ✨</div>`
+      }
+    </div>`;
+    el.onclick = () => openCalendar("day", today);
+  }
+
+  function renderMonthWidget(el) {
+    injectStyle();
+    const today = todayStr();
+    const d = parseDate(today);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const byDay = itemsByDay(
+      mkDue(y, m, 1),
+      mkDue(y, m, 31),
+      confirmationMap(),
+    );
+    const cells = miniMonthCells(y, m, byDay, {
+      dayAttr: (due, dayItems) =>
+        `data-day="${escAttr(due)}" title="${escAttr(
+          dayItems.length
+            ? `${fmtDate(due)} — ${dayItems.length} ${dayItems.length === 1 ? "pozycja" : "pozycji"}`
+            : fmtDate(due),
+        )}"`,
+    });
+    el.innerHTML = `<div class="tz-monthw">
+      <div class="tz-monthw-head">${esc(capitalize(MONTHS[m]))} ${y}</div>
+      <div class="tz-ygrid7">${cells}</div>
+    </div>`;
+    el.onclick = (e) => {
+      const cell = e.target.closest("[data-day]");
+      if (cell) openCalendar("day", cell.getAttribute("data-day"));
+      else openCalendar("month", mkDue(y, m, 1));
+    };
   }
 
   // ------------------------------------------------------------- suggestions (task 5/6)
@@ -712,6 +798,15 @@ export default async function activate(cl) {
       .tz-sugg-row{display:flex;align-items:center;gap:10px;padding:4px 0;font-size:13px;}
       .tz-sugg-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       .tz-sugg-actions{margin-left:auto;display:flex;gap:6px;}
+      /* widgets Dzisiaj / Miesiąc (6/6) */
+      .tz-ycell .dot.due{background:#f9e2af;}
+      .tz-today{display:flex;flex-direction:column;gap:4px;}
+      .tz-today-date{font-size:14px;font-weight:700;text-transform:capitalize;margin-bottom:2px;}
+      .tz-today .tz-widget-row{gap:6px;}
+      .tz-monthw{display:flex;flex-direction:column;gap:6px;cursor:pointer;}
+      .tz-monthw-head{font-size:12px;font-weight:600;color:var(--text-secondary,#bac2de);text-transform:capitalize;}
+      .tz-monthw .tz-ycell{height:18px;font-size:10px;border-radius:3px;}
+      .tz-monthw .tz-ycell[data-day]:hover{background:var(--bg-tertiary,#313244);}
     `;
     document.head.appendChild(s);
   }
@@ -1500,33 +1595,54 @@ export default async function activate(cl) {
     return `<div class="tz-body">${rows}</div>`;
   }
 
-  function yearViewHtml(confMap) {
-    const y = parseDate(cal.anchor).getFullYear();
-    const items = itemsForRange(mkDue(y, 0, 1), mkDue(y, 11, 31), confMap);
+  // Items of a range grouped by due date — the shape both the year view and
+  // the month widget need.
+  function itemsByDay(startStr, endStr, confMap) {
     const byDay = new Map();
-    for (const it of items) {
+    for (const it of itemsForRange(startStr, endStr, confMap)) {
       if (!byDay.has(it.due)) byDay.set(it.due, []);
       byDay.get(it.due).push(it);
     }
+    return byDay;
+  }
+
+  // The busiest status of a day decides its dot colour: przegapiona wins over
+  // do potwierdzenia, which wins over anything upcoming.
+  function dayDotStatus(dayItems) {
+    if (dayItems.some((it) => it.status === "missed")) return "missed";
+    if (dayItems.some((it) => it.status === "due")) return "due";
+    return dayItems.length ? "upcoming" : "";
+  }
+
+  // One mini month grid, shared by the Rok view and the „Miesiąc" widget.
+  // `dayAttr` lets the caller make cells clickable without duplicating layout.
+  function miniMonthCells(y, m, byDay, { dayAttr } = {}) {
     const today = todayStr();
+    const firstDow = (new Date(y, m, 1).getDay() + 6) % 7;
+    let cells = "";
+    for (let i = 0; i < firstDow; i++) cells += `<div class="tz-ycell"></div>`;
+    for (let day = 1; day <= daysInMonth(y, m); day++) {
+      const due = mkDue(y, m, day);
+      const dayItems = byDay.get(due) || [];
+      const dot = dayDotStatus(dayItems);
+      const attr = dayAttr ? dayAttr(due, dayItems) : "";
+      cells += `<div class="tz-ycell ${due === today ? "today" : ""}" ${attr}>${
+        dot ? `<span class="dot ${dot}"></span>` : day
+      }</div>`;
+    }
+    return cells;
+  }
+
+  function yearViewHtml(confMap) {
+    const y = parseDate(cal.anchor).getFullYear();
+    const byDay = itemsByDay(mkDue(y, 0, 1), mkDue(y, 11, 31), confMap);
     const minis = MONTHS.map((name, m) => {
-      const dim = daysInMonth(y, m);
-      const firstDow = (new Date(y, m, 1).getDay() + 6) % 7;
-      let cells = "";
-      for (let i = 0; i < firstDow; i++)
-        cells += `<div class="tz-ycell"></div>`;
       let sum = 0;
-      for (let day = 1; day <= dim; day++) {
-        const due = mkDue(y, m, day);
-        const dayItems = byDay.get(due) || [];
-        sum += dayItems.reduce((s, it) => s + Number(it.amount || 0), 0);
-        const missed = dayItems.some((it) => it.status === "missed");
-        cells += `<div class="tz-ycell ${due === today ? "today" : ""}">${
-          dayItems.length
-            ? `<span class="dot ${missed ? "missed" : ""}"></span>`
-            : day
-        }</div>`;
+      for (let day = 1; day <= daysInMonth(y, m); day++) {
+        for (const it of byDay.get(mkDue(y, m, day)) || [])
+          sum += Number(it.amount || 0);
       }
+      const cells = miniMonthCells(y, m, byDay);
       return `<div class="tz-ymonth" data-month="${m}" title="Pokaż miesiąc">
         <h4>${esc(name)}</h4>
         <div class="tz-ygrid7">${cells}</div>
@@ -1774,6 +1890,20 @@ export default async function activate(cl) {
     dashboard: true,
     render: renderUpcomingWidget,
   });
+  cl.registerWidget({
+    id: "today",
+    title: "Dzisiaj",
+    icon: "📌",
+    dashboard: true,
+    render: renderTodayWidget,
+  });
+  cl.registerWidget({
+    id: "month",
+    title: "Miesiąc",
+    icon: "🗓️",
+    dashboard: true,
+    render: renderMonthWidget,
+  });
 
   // ----------------------------------------------------------- agent tools (5/6)
   // Exposed over MCP as terminarz_list / _pending / _confirm / _suggest.
@@ -1887,7 +2017,9 @@ export default async function activate(cl) {
     const { obligationId, dueDate, paidDate } = args;
     const o = obligations().find((x) => x.id === obligationId);
     if (!o)
-      throw new Error(`zobowiązanie nie znalezione: ${obligationId ?? "(brak id)"}`);
+      throw new Error(
+        `zobowiązanie nie znalezione: ${obligationId ?? "(brak id)"}`,
+      );
     for (const [label, v] of [
       ["dueDate", dueDate],
       ["paidDate", paidDate],
