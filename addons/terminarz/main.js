@@ -1369,6 +1369,15 @@ export default async function activate(cl) {
 
     render();
     document.body.appendChild(bg);
+
+    // Kalendarz mógł zostać udostępniony w Ustawieniach już po starcie
+    // addonu — odświeżamy listę i przerysowujemy pole, jeśli się zmieniła.
+    const before = sharedCalendars.map((c) => c.id).join("|");
+    loadSharedCalendars()
+      .then((list) => {
+        if (list.map((c) => c.id).join("|") !== before && bg.isConnected) render();
+      })
+      .catch(() => {});
   }
 
   // ------------------------------------------------------------- confirm
