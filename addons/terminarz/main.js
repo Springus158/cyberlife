@@ -559,10 +559,13 @@ export default async function activate(cl) {
   // The host rebuilds widget frames on unrelated events (project switch,
   // kanban, automations), so holding element references would pile up
   // detached nodes. Query the live DOM instead, like refreshLiveWidgets does.
+  // Host nadaje widgetom przedrostek z id addonu — wyprowadzamy go tak samo,
+  // żeby zmiana id nie rozjechała się z selektorami w refreshWidgets.
+  const wid = (short) => `${cl.id}.${short}`;
   const WIDGETS = [
-    { id: "terminarz.upcoming", render: (el) => renderUpcomingWidget(el) },
-    { id: "terminarz.today", render: (el) => renderTodayWidget(el) },
-    { id: "terminarz.month", render: (el) => renderMonthWidget(el) },
+    { id: wid("upcoming"), render: (el) => renderUpcomingWidget(el) },
+    { id: wid("today"), render: (el) => renderTodayWidget(el) },
+    { id: wid("month"), render: (el) => renderMonthWidget(el) },
   ];
   function refreshWidgets() {
     for (const w of WIDGETS) {
@@ -589,8 +592,9 @@ export default async function activate(cl) {
   function openCalendar(view, anchor) {
     cal.view = view;
     if (anchor) setAnchor(anchor);
+    // openModule woła onShow strony, która renderuje kalendarz z nową kotwicą —
+    // dodatkowy render tylko przebudowywałby DOM po raz drugi
     cl.openModule("main", "calendar");
-    if (calEl) renderCalendar(calEl);
   }
 
   function renderTodayWidget(el) {
@@ -598,7 +602,7 @@ export default async function activate(cl) {
     const today = todayStr();
     const d = parseDate(today);
     const heading = `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS_GEN[d.getMonth()]}`;
-    const items = itemsForRange(today, today, confirmationMap());
+    const items = itemsForRange(today, today, confirmationMap(), obligations());
     const shown = items.slice(0, TODAY_WIDGET_MAX);
     const more = items.length - shown.length;
     el.innerHTML = `<div class="tz-today">
@@ -632,6 +636,7 @@ export default async function activate(cl) {
       mkDue(y, m, 1),
       mkDue(y, m, 31),
       confirmationMap(),
+      obligations(),
     );
     const cells = miniMonthCells(y, m, byDay, {
       dayAttr: (due, dayItems) =>
@@ -646,8 +651,10 @@ export default async function activate(cl) {
       <div class="tz-ygrid7">${cells}</div>
     </div>`;
     el.onclick = (e) => {
-      const cell = e.target.closest("[data-day]");
-      if (cell) openCalendar("day", cell.getAttribute("data-day"));
+      // closest() idzie aż do korzenia dokumentu — ograniczamy do widgetu
+      const cell = e.target.closest(".tz-ycell[data-day]");
+      if (cell && el.contains(cell))
+        openCalendar("day", cell.getAttribute("data-day"));
       else openCalendar("month", mkDue(y, m, 1));
     };
   }
@@ -1460,9 +1467,16 @@ export default async function activate(cl) {
 
   // Generic day items so a second kind (e.g. Google events) can join later:
   // {kind, due, status, title, amount, ownerId, o}
-  function itemsForRange(startStr, endStr, confMap) {
+  // `list` domyślnie respektuje filtry strony Kalendarz; widgety podają pełną
+  // listę, bo filtr z innej strony nie może po cichu chować pozycji na pulpicie.
+  function itemsForRange(
+    startStr,
+    endStr,
+    confMap,
+    list = filteredObligations(),
+  ) {
     const out = [];
-    for (const o of filteredObligations()) {
+    for (const o of list) {
       for (const due of occurrencesBetween(o.cycle, startStr, endStr)) {
         const conf = confMap[occKey(o.id, due)];
         out.push({
@@ -1597,9 +1611,14 @@ export default async function activate(cl) {
 
   // Items of a range grouped by due date — the shape both the year view and
   // the month widget need.
-  function itemsByDay(startStr, endStr, confMap) {
+  function itemsByDay(startStr, endStr, confMap, list) {
     const byDay = new Map();
-    for (const it of itemsForRange(startStr, endStr, confMap)) {
+    for (const it of itemsForRange(
+      startStr,
+      endStr,
+      confMap,
+      list ?? filteredObligations(),
+    )) {
       if (!byDay.has(it.due)) byDay.set(it.due, []);
       byDay.get(it.due).push(it);
     }
