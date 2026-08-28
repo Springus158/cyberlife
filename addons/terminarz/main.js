@@ -2148,17 +2148,29 @@ export default async function activate(cl) {
   // Obce wydarzenia jako drugi rodzaj pozycji — tylko do odczytu, bez kwoty
   // i bez potwierdzania. Widoki traktują je jak każdą inną pozycję dnia, bo od
   // 3/6 renderują ogólne itemy.
+  // Google zwraca godziny w strefie kalendarza (często UTC), więc dzień
+  // i godzinę liczymy lokalnie — inaczej wieczorne wydarzenie wylądowałoby
+  // w złym dniu, a godzina byłaby przesunięta o offset strefy.
+  function extDayAndTime(e) {
+    if (e.allDay) return { day: (e.start || "").slice(0, 10), time: "" };
+    const d = new Date(e.start);
+    if (isNaN(d.getTime()))
+      return { day: (e.start || "").slice(0, 10), time: "" };
+    return {
+      day: dateStr(d),
+      time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+    };
+  }
+
   function externalItems(startStr, endStr) {
     if (!prefs().showGoogle) return [];
     return externalCache()
-      .items.filter((e) => {
-        const day = (e.start || "").slice(0, 10);
-        return day >= startStr && day <= endStr;
-      })
-      .map((e) => ({
+      .items.map((e) => ({ e, ...extDayAndTime(e) }))
+      .filter(({ day }) => day >= startStr && day <= endStr)
+      .map(({ e, day, time }) => ({
         kind: "google",
-        due: (e.start || "").slice(0, 10),
-        time: e.allDay ? "" : (e.start || "").slice(11, 16),
+        due: day,
+        time,
         status: "external",
         title: e.title,
         account: e.account,
