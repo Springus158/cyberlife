@@ -406,7 +406,10 @@ export default async function activate(cl) {
   // "missed". Each fires at most once — the sent marks live in their own
   // storage key so a reinstall of the addon does not replay months of alerts.
   const K_SENT = "sent"; // { "oblId|due|stage": "YYYY-MM-DD" }
-  const REMIND_AHEAD = [7, 1]; // dni przed terminem
+  const REMIND_AHEAD = 7; // pierwsze ostrzeżenie: tyle dni przed terminem
+  const MISSED_LOOKBACK = 30; // jak stare przegapione jeszcze zgłaszamy
+  const MAX_PER_RUN = 5; // żeby zaległości nie wysypały serii powiadomień
+  const MARK_KEEP_DAYS = 90; // po tylu dniach znacznik nie jest już potrzebny
   const REMIND_INTERVAL_MS = 60 * 60 * 1000; // co godzinę
   let remindTimer = null;
 
@@ -416,14 +419,15 @@ export default async function activate(cl) {
       : {};
   }
 
-  function reminderText(o, due, stage) {
+  function reminderText(o, due, stage, left) {
     const ow = ownerById(o.ownerId);
     const who = ow ? ` (${ow.name})` : "";
     const amount = formatAmount(o.amount);
     if (stage === "missed")
       return `Przegapione: ${o.name} — ${amount}${who}, termin ${fmtDate(due)}`;
-    if (stage === "d1") return `Jutro: ${o.name} — ${amount}${who}`;
-    return `Za 7 dni: ${o.name} — ${amount}${who}, termin ${fmtDate(due)}`;
+    if (stage === "d1")
+      return `${left === 0 ? "Dziś" : "Jutro"}: ${o.name} — ${amount}${who}`;
+    return `Za ${left} dni: ${o.name} — ${amount}${who}, termin ${fmtDate(due)}`;
   }
 
   // Which reminders are due right now, given today's date and what was sent.
@@ -432,27 +436,48 @@ export default async function activate(cl) {
     const marks = sentMarks();
     const confMap = confirmationMap();
     const out = [];
+    // Window reaches back far enough that a payment missed while the app was
+    // closed still gets reported, and forward to the first warning.
+    const lookback = addDays(today, -MISSED_LOOKBACK);
+    const to = addDays(today, REMIND_AHEAD);
     for (const o of obligations()) {
-      // window: from the oldest occurrence that can still turn "missed"
-      // through the furthest look-ahead we warn about
-      const from = addDays(today, -(GRACE_DAYS + 1));
-      const to = addDays(today, REMIND_AHEAD[0]);
+      // never reach before the obligation existed — the same boundary the
+      // history uses, so a freshly added record cannot claim a missed payment
+      // from before it was created
+      const start = windowStart(o);
+      const from = start > lookback ? start : lookback;
       for (const due of occurrencesBetween(o.cycle, from, to)) {
         const status = occStatus(o.id, due, confMap);
         if (status === "confirmed") continue;
         const left = daysBetween(today, due);
+        // Stages are ranges, not exact days — opening the app 5 days before
+        // the term must still warn instead of silently skipping day 7.
         let stage = null;
         if (status === "missed") stage = "missed";
-        else if (REMIND_AHEAD.includes(left)) stage = `d${left}`;
+        else if (left <= 1) stage = "d1";
+        else if (left <= REMIND_AHEAD) stage = "d7";
         if (!stage) continue;
         const key = `${o.id}|${due}|${stage}`;
         if (marks[key]) continue;
         out.push({
           key,
+          due,
           title: "Terminarz",
-          message: reminderText(o, due, stage),
+          message: reminderText(o, due, stage, left),
         });
       }
+    }
+    // najpilniejsze najpierw, gdy zaległości jest więcej niż limit na przebieg
+    return out.sort((a, b) => a.due.localeCompare(b.due)).slice(0, MAX_PER_RUN);
+  }
+
+  // Marks only need to outlive the window that can still produce a reminder.
+  function pruneMarks(marks) {
+    const cutoff = addDays(todayStr(), -MARK_KEEP_DAYS);
+    const out = {};
+    for (const [k, v] of Object.entries(marks)) {
+      const due = k.split("|")[1];
+      if (!due || due >= cutoff) out[k] = v;
     }
     return out;
   }
@@ -477,7 +502,7 @@ export default async function activate(cl) {
         break;
       }
     }
-    if (sent) await put(K_SENT, marks);
+    if (sent) await put(K_SENT, pruneMarks(marks));
     return sent;
   }
 
