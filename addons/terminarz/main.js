@@ -233,10 +233,16 @@ export default async function activate(cl) {
       .slice()
       .reverse()
       .find((due) => occStatus(o.id, due, confMap) !== "confirmed");
-    if (unresolved)
-      return { due: unresolved, status: occStatus(o.id, unresolved, confMap) };
-    if (next) return { due: next, status: "upcoming" };
-    return null;
+    const pick = unresolved || next;
+    if (!pick) return null;
+    return {
+      due: effectiveDue(o.id, pick),
+      sourceDue: pick,
+      status: unresolved
+        ? occStatus(o.id, pick, confMap, effectiveDue(o.id, pick))
+        : "upcoming",
+      gone: isGone(o.id, pick),
+    };
   }
 
   // "YYYY-MM" contract end → days until the last day of that month (null when unset).
@@ -1770,6 +1776,7 @@ export default async function activate(cl) {
         const nearCell = near
           ? `<div>${esc(fmtDate(near.due))}</div>
              <span class="tz-status ${near.status}">${STATUS_LABEL[near.status]}</span>
+             ${near.gone ? ` <span class="tz-gmark warn" title="Event usunięty w Google">⚠</span>` : ""}
              ${
                near.status === "due" || near.status === "missed"
                  ? `<div><button class="tz-btn tz-confirm-btn tz-confirm" style="padding:4px 10px;font-size:12px">Potwierdź</button></div>`
@@ -2080,7 +2087,7 @@ export default async function activate(cl) {
           .map((it) =>
             it.kind === "google"
               ? `<span class="tz-pill ext" title="${escAttr(it.account || "")}">📅 ${esc(shortName(it.title))}</span>`
-              : `<span class="tz-pill ${it.status}">${esc(shortName(it.title))} · ${formatAmount(it.amount)}</span>`,
+              : `<span class="tz-pill ${it.status}" ${it.gone ? 'title="Event usunięty w Google"' : ""}>${it.gone ? "⚠ " : ""}${esc(shortName(it.title))} · ${formatAmount(it.amount)}</span>`,
           )
           .join("")}
         ${more > 0 ? `<span class="tz-more">+${more} więcej</span>` : ""}
@@ -2112,6 +2119,7 @@ export default async function activate(cl) {
           ${chip}
           <span class="tz-amt">${formatAmount(it.amount)}</span>
           <span class="tz-status ${it.status}">${STATUS_LABEL[it.status]}</span>
+          ${it.gone ? `<span class="tz-gmark warn" title="Event usunięty w Google">⚠</span>` : ""}
           ${confirmable ? `<button class="tz-btn tz-day-confirm" data-key="${escAttr(occKey(it.o.id, it.due))}" style="padding:4px 10px;font-size:12px">Potwierdź</button>` : ""}
         </div>`;
       })
