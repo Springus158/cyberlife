@@ -241,7 +241,9 @@ export default async function activate(cl) {
   const K_OWNERS = "owners";
   const K_OBL = "obl"; // chunk prefix: obl, obl#2, obl#3, …
   const K_CONF = "conf"; // confirmations, same chunking: conf, conf#2, …
-  let cache = null;
+  // Starts as an empty object, never null: the host may render the widget
+  // the moment it is registered, before initStore() has filled it in.
+  let cache = {};
 
   async function initStore() {
     cache = await cl.storage.all();
@@ -1654,6 +1656,9 @@ export default async function activate(cl) {
     },
   });
 
+  // Register after the store is loaded so the first render already has data.
+  await initStore();
+
   cl.registerWidget({
     id: "upcoming",
     title: "Nadchodzące płatności",
@@ -1661,8 +1666,6 @@ export default async function activate(cl) {
     dashboard: true,
     render: renderUpcomingWidget,
   });
-
-  await initStore();
 
   // Reminders: once at startup, then hourly. The timer is cleared on dispose
   // so a hot reload does not leave a second one running.
