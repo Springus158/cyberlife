@@ -154,15 +154,25 @@ func UpdateEvent(svc *calendarapi.Service, calendarID, eventID string, in EventI
 	if eventID == "" {
 		return nil, fmt.Errorf("event id is required")
 	}
+	// A deleted event lingers as status "cancelled" and Patch would happily
+	// bring it back to life, so check first — from the caller's side a deleted
+	// event does not exist.
 	current, err := svc.Events.Get(calendarID, eventID).Do()
 	if err != nil {
 		return nil, notFound("event", err)
 	}
-	patch, err := applyInput(current, in, false)
+	if current.Status == "cancelled" {
+		return nil, &NotFoundError{What: "event"}
+	}
+	// Patch, not Update: a full Update means echoing back the event we read,
+	// and Google rejects its own reminders block coming back
+	// ("cannotUseDefaultRemindersAndSpecifyOverride"). Patch sends only what
+	// changed and leaves server-managed fields alone.
+	patch, err := applyInput(&calendarapi.Event{}, in, false)
 	if err != nil {
 		return nil, err
 	}
-	updated, err := svc.Events.Update(calendarID, eventID, patch).Do()
+	updated, err := svc.Events.Patch(calendarID, eventID, patch).Do()
 	if err != nil {
 		return nil, notFound("event", err)
 	}
@@ -173,6 +183,13 @@ func UpdateEvent(svc *calendarapi.Service, calendarID, eventID string, in EventI
 func DeleteEvent(svc *calendarapi.Service, calendarID, eventID string) error {
 	if eventID == "" {
 		return fmt.Errorf("event id is required")
+	}
+	current, err := svc.Events.Get(calendarID, eventID).Do()
+	if err != nil {
+		return notFound("event", err)
+	}
+	if current.Status == "cancelled" {
+		return &NotFoundError{What: "event"}
 	}
 	if err := svc.Events.Delete(calendarID, eventID).Do(); err != nil {
 		return notFound("event", err)
