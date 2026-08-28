@@ -401,6 +401,22 @@ function makeContext(addon, inst) {
       return res.json();
     },
 
+    // System notification. Unlike api() this is not an API group, so the
+    // manifest permission is checked here rather than derived from a path.
+    async notify(title, message) {
+      if (!(addon.permissions || []).includes('notify')) {
+        throw new Error('notify(): addon.json does not declare the "notify" permission');
+      }
+      if (!String(title || '').trim()) throw new Error('notify(): title is required');
+      const res = await fetch(`${API_BASE}/api/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: String(title), message: String(message ?? '') }),
+      });
+      if (!res.ok) throw new Error(`notify(): ${res.status} ${await res.text()}`);
+      return res.json();
+    },
+
     log(...args) {
       console.log(`[addon:${addon.id}]`, ...args);
     },
