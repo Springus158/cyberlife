@@ -16,6 +16,7 @@ import (
 	"github.com/kalor62/cyberlife/internal/agentskills"
 	"github.com/kalor62/cyberlife/internal/api"
 	"github.com/kalor62/cyberlife/internal/automations"
+	"github.com/kalor62/cyberlife/internal/calendar"
 	"github.com/kalor62/cyberlife/internal/claude"
 	"github.com/kalor62/cyberlife/internal/git"
 	"github.com/kalor62/cyberlife/internal/gmail"
@@ -43,6 +44,7 @@ type App struct {
 	apiServer        *api.Server
 	stopBackground   chan struct{}
 	gmailManager     *gmail.Manager
+	calendarManager  *calendar.Manager
 	gmailContacts    map[string]gmailContactsCache
 	voiceProcess     *exec.Cmd
 	voiceStdin       io.WriteCloser
@@ -146,7 +148,8 @@ func (a *App) startup(ctx context.Context) {
 				a.syncAgentSkills()
 				runtime.EventsEmit(a.ctx, "addons-changed", nil)
 			},
-			Notify: a.automationNotify,
+			Notify:   a.automationNotify,
+			Calendar: a.calendarHooks(),
 		})
 		a.apiServer.Start()
 		a.syncAgentSkills()
@@ -169,6 +172,14 @@ func (a *App) startup(ctx context.Context) {
 	if a.stateManager != nil {
 		a.gmailManager.SetTokenRefreshHandler(func(email, tokenJSON string) {
 			a.stateManager.UpdateGmailToken(email, tokenJSON)
+		})
+	}
+
+	// Initialize Google Calendar manager
+	a.calendarManager = calendar.NewManager()
+	if a.stateManager != nil {
+		a.calendarManager.SetTokenRefreshHandler(func(email, tokenJSON string) {
+			a.stateManager.UpdateCalendarToken(email, tokenJSON)
 		})
 	}
 

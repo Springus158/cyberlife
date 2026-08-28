@@ -45,6 +45,7 @@ type Hooks struct {
 	WebhookFire    func(slug string, body []byte) int
 	OnAddonsChange func()
 	Notify         func(title, message string) error
+	Calendar       CalendarHooks
 }
 
 type Server struct {
@@ -67,6 +68,7 @@ type Server struct {
 	webhookFire     func(slug string, body []byte) int
 	onAddonsChange  func()
 	systemNotify    func(title, message string) error
+	calendar        CalendarHooks
 	http            *http.Server
 
 	addonCallsMu sync.Mutex
@@ -97,6 +99,7 @@ func NewServer(manager *state.Manager, hooks Hooks) *Server {
 		webhookFire:     hooks.WebhookFire,
 		onAddonsChange:  hooks.OnAddonsChange,
 		systemNotify:    hooks.Notify,
+		calendar:        hooks.Calendar,
 	}
 }
 
@@ -108,6 +111,8 @@ func (s *Server) Start() {
 	mux.HandleFunc("/api/board/move", s.handleMove)
 	mux.HandleFunc("/api/board/comment", s.handleComment)
 	mux.HandleFunc("/api/notify", s.handleNotify)
+	mux.HandleFunc("/api/calendar/accounts", s.handleCalendarAccounts)
+	mux.HandleFunc("/api/calendar/events", s.handleCalendarEvents)
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/health/library", s.handleHealthLibrary)
 	mux.HandleFunc("/api/health/track", groupPost[healthRequest](s, "health", s.opHealthTrack))

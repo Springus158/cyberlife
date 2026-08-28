@@ -728,6 +728,61 @@ export namespace main {
 	        this.note = source["note"];
 	    }
 	}
+	export class CalendarInfo {
+	    id: string;
+	    name: string;
+	    primary?: boolean;
+	    readOnly?: boolean;
+	    shared: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CalendarInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.primary = source["primary"];
+	        this.readOnly = source["readOnly"];
+	        this.shared = source["shared"];
+	    }
+	}
+	export class CalendarAccountInfo {
+	    email: string;
+	    calendars: CalendarInfo[];
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CalendarAccountInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.calendars = this.convertValues(source["calendars"], CalendarInfo);
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class DependencyStatus {
 	    id: string;
 	    name: string;
@@ -1152,6 +1207,56 @@ export namespace state {
 	        this.color = source["color"];
 	        this.builtIn = source["builtIn"];
 	    }
+	}
+	export class CalendarAccount {
+	    email: string;
+	    tokenJson: string;
+	    clientId?: string;
+	    clientSecret?: string;
+	    shared?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CalendarAccount(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.email = source["email"];
+	        this.tokenJson = source["tokenJson"];
+	        this.clientId = source["clientId"];
+	        this.clientSecret = source["clientSecret"];
+	        this.shared = source["shared"];
+	    }
+	}
+	export class CalendarSettings {
+	    accounts: CalendarAccount[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CalendarSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accounts = this.convertValues(source["accounts"], CalendarAccount);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class GmailAccount {
 	    email: string;
@@ -1656,6 +1761,7 @@ export namespace state {
 	    claudeAccounts?: ClaudeAccount[];
 	    jira?: JiraSettings;
 	    gmail?: GmailSettings;
+	    calendar?: CalendarSettings;
 	    agentSkills?: Record<string, boolean>;
 	    runners?: Runner[];
 	    defaultRunner?: string;
@@ -1701,6 +1807,7 @@ export namespace state {
 	        this.claudeAccounts = this.convertValues(source["claudeAccounts"], ClaudeAccount);
 	        this.jira = this.convertValues(source["jira"], JiraSettings);
 	        this.gmail = this.convertValues(source["gmail"], GmailSettings);
+	        this.calendar = this.convertValues(source["calendar"], CalendarSettings);
 	        this.agentSkills = source["agentSkills"];
 	        this.runners = this.convertValues(source["runners"], Runner);
 	        this.defaultRunner = source["defaultRunner"];
@@ -1735,6 +1842,8 @@ export namespace state {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 	

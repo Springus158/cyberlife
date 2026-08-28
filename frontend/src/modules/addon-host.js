@@ -149,6 +149,7 @@ const PATH_GROUPS = [
   ['/api/widgets', 'widgets'], ['/api/term', 'term'], ['/api/projects', 'projects'],
   ['/api/tasks', 'tasks'], ['/api/notes', 'notes'], ['/api/prompts', 'prompts'],
   ['/api/system', 'system'], ['/api/addons', 'addons'],
+  ['/api/calendar', 'calendar'],
 ];
 
 function requiredGroup(path) {

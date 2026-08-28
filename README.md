@@ -111,6 +111,53 @@ Even built-in integrations (Gmail, Jira, voice dictation, health checks, Pomodor
 
 **Agents build addons too.** The `cyberlife-addons` skill teaches any connected agent the manifest format and workflow — ask your agent to *"build me a Cyber Life addon that tracks my habits"* and it can scaffold, install and hot-reload it. Start from [`addons/hello-world`](addons/hello-world).
 
+## Google Calendar
+
+Cyber Life talks to Google Calendar through **your own OAuth client** — the app ships
+no credentials, so every user connects their own Google Cloud project. Accounts and
+tokens stay local, next to the Gmail ones.
+
+**One-time setup in [Google Cloud Console](https://console.cloud.google.com/):**
+
+1. Create a project (the same one can serve Gmail and Calendar).
+2. *APIs & Services → Library* → enable **Google Calendar API**. Without it authorization
+   succeeds but every call fails with `accessNotConfigured`.
+3. *OAuth consent screen* → **External** → add the Google addresses you will connect as
+   **test users**. A project in *Testing* issues tokens that expire after 7 days —
+   **Publish app** removes that limit.
+4. *Credentials → Create credentials → OAuth client ID → **Desktop app*** → copy the
+   Client ID and Secret.
+
+The *Desktop app* type matters: authorization runs over a loopback redirect on
+`http://127.0.0.1:<random port>/oauth/callback`, and that client type accepts any
+loopback port, so there is no redirect URI to register.
+
+**Connecting:** *Settings → 📆 Google Calendar → Add account*, paste the Client ID and
+Secret, then approve in the browser. Each account keeps its own credentials, so a personal
+project and a company one work side by side.
+
+**Sharing with addons:** tick the calendars an account should expose. That tick is the
+access boundary — the token can read the whole account, but `/api/calendar/*` resolves
+only ticked calendars and answers **404** for anything else. Read-only calendars are
+labelled; Google rejects writes to them.
+
+**API** (needs `"permissions": ["calendar"]` in `addon.json`):
+
+| Call | Result |
+|---|---|
+| `GET /api/calendar/accounts` | accounts with their shared calendars |
+| `GET /api/calendar/events?calendar=<id>&from=&to=` | events in a date window (default −7 days → +1 month), recurring ones expanded |
+| `POST /api/calendar/events` `{calendar, title, date}` | all-day event; `start`/`end` (RFC3339) instead of `date` for a timed one |
+| `PATCH /api/calendar/events` `{calendar, event, …}` | updates the given fields |
+| `DELETE /api/calendar/events` `{calendar, event}` | removes the event |
+
+Errors: **404** for an unknown or unshared calendar and for a missing event, **400** for
+bad arguments (no `calendar`, malformed date, `from` after `to`).
+
+> **Changing the requested scope invalidates stored tokens.** The app asks for
+> `https://www.googleapis.com/auth/calendar` because it creates, edits and deletes events;
+> if that list ever changes, every account has to be disconnected and added again.
+
 ## Governance: a gate-kept core, an open edge
 
 - **Core is gate-kept.** The core stays small, coherent and keyboard-first; PRs are welcome but reviewed thoroughly and conservatively — open an issue first for anything non-trivial.

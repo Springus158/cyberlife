@@ -23,6 +23,12 @@ export function AddonsList():Promise<main.AddonsInfo>;
 
 export function AddonsReload():Promise<main.AddonsInfo>;
 
+export function CalendarConnect(arg1:string,arg2:string):Promise<string>;
+
+export function CalendarDisconnect(arg1:string):Promise<void>;
+
+export function CalendarSetShared(arg1:string,arg2:Array<string>):Promise<void>;
+
 export function CheckDependencies():Promise<Array<main.DependencyStatus>>;
 
 export function ClearTerminalAccount(arg1:string):Promise<void>;
@@ -90,6 +96,8 @@ export function GetAppVersion():Promise<string>;
 export function GetAutomationRules():Promise<Array<state.AutomationRule>>;
 
 export function GetAutomationRuns(arg1:number):Promise<Array<state.AutomationRun>>;
+
+export function GetCalendarConfig():Promise<Array<main.CalendarAccountInfo>>;
 
 export function GetClaudeAccounts():Promise<Array<state.ClaudeAccount>>;
 

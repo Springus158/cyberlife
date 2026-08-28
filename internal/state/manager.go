@@ -1316,3 +1316,92 @@ func (m *Manager) SavePomodoroSettings(sessionMinutes, breakMinutes int) {
 	m.mu.Unlock()
 	m.Save()
 }
+
+// ---- Google Calendar accounts ----
+
+func (m *Manager) GetCalendarSettings() CalendarSettings {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.state.Calendar == nil {
+		return CalendarSettings{}
+	}
+	settings := CalendarSettings{Accounts: make([]CalendarAccount, len(m.state.Calendar.Accounts))}
+	for i, a := range m.state.Calendar.Accounts {
+		settings.Accounts[i] = a
+		settings.Accounts[i].Shared = append([]string(nil), a.Shared...)
+	}
+	return settings
+}
+
+// AddCalendarAccount stores a freshly authorized account, or refreshes the
+// token and credentials of one that is already there. Shared calendars survive
+// a re-authorization, so re-consenting does not silently unshare anything.
+func (m *Manager) AddCalendarAccount(email, tokenJSON, clientID, clientSecret string) {
+	m.mu.Lock()
+	if m.state.Calendar == nil {
+		m.state.Calendar = &CalendarSettings{}
+	}
+	found := false
+	for i := range m.state.Calendar.Accounts {
+		if m.state.Calendar.Accounts[i].Email == email {
+			m.state.Calendar.Accounts[i].TokenJSON = tokenJSON
+			m.state.Calendar.Accounts[i].ClientID = clientID
+			m.state.Calendar.Accounts[i].ClientSecret = clientSecret
+			found = true
+			break
+		}
+	}
+	if !found {
+		m.state.Calendar.Accounts = append(m.state.Calendar.Accounts, CalendarAccount{
+			Email: email, TokenJSON: tokenJSON, ClientID: clientID, ClientSecret: clientSecret,
+		})
+	}
+	m.mu.Unlock()
+	m.Save()
+}
+
+// UpdateCalendarToken persists a refreshed token without touching credentials
+func (m *Manager) UpdateCalendarToken(email, tokenJSON string) {
+	m.mu.Lock()
+	if m.state.Calendar != nil {
+		for i := range m.state.Calendar.Accounts {
+			if m.state.Calendar.Accounts[i].Email == email {
+				m.state.Calendar.Accounts[i].TokenJSON = tokenJSON
+				break
+			}
+		}
+	}
+	m.mu.Unlock()
+	m.Save()
+}
+
+// SetCalendarShared replaces the set of calendars an account exposes to addons
+func (m *Manager) SetCalendarShared(email string, calendarIDs []string) {
+	m.mu.Lock()
+	if m.state.Calendar != nil {
+		for i := range m.state.Calendar.Accounts {
+			if m.state.Calendar.Accounts[i].Email == email {
+				m.state.Calendar.Accounts[i].Shared = append([]string(nil), calendarIDs...)
+				break
+			}
+		}
+	}
+	m.mu.Unlock()
+	m.Save()
+}
+
+// RemoveCalendarAccount forgets an account, its token and its sharing choices
+func (m *Manager) RemoveCalendarAccount(email string) {
+	m.mu.Lock()
+	if m.state.Calendar != nil {
+		accounts := m.state.Calendar.Accounts[:0]
+		for _, a := range m.state.Calendar.Accounts {
+			if a.Email != email {
+				accounts = append(accounts, a)
+			}
+		}
+		m.state.Calendar.Accounts = accounts
+	}
+	m.mu.Unlock()
+	m.Save()
+}
