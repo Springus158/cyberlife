@@ -300,6 +300,8 @@ export default async function activate(cl) {
       const idx = stale === prefix ? 0 : Number(stale.split("#")[1]) - 1;
       if (idx >= parts.length) await drop(stale);
     }
+    // any obligation/confirmation write is visible in the widget
+    refreshWidgets();
   }
   async function saveObligations(list) {
     await saveChunked(K_OBL, list);
@@ -399,6 +401,139 @@ export default async function activate(cl) {
     return h;
   }
 
+  // ------------------------------------------------------------- reminders (task 4/6)
+  // Three moments per occurrence: 7 days out, 1 day out, and once it turns
+  // "missed". Each fires at most once — the sent marks live in their own
+  // storage key so a reinstall of the addon does not replay months of alerts.
+  const K_SENT = "sent"; // { "oblId|due|stage": "YYYY-MM-DD" }
+  const REMIND_AHEAD = [7, 1]; // dni przed terminem
+  const REMIND_INTERVAL_MS = 60 * 60 * 1000; // co godzinę
+  let remindTimer = null;
+
+  function sentMarks() {
+    return cache[K_SENT] && typeof cache[K_SENT] === "object"
+      ? cache[K_SENT]
+      : {};
+  }
+
+  function reminderText(o, due, stage) {
+    const ow = ownerById(o.ownerId);
+    const who = ow ? ` (${ow.name})` : "";
+    const amount = formatAmount(o.amount);
+    if (stage === "missed")
+      return `Przegapione: ${o.name} — ${amount}${who}, termin ${fmtDate(due)}`;
+    if (stage === "d1") return `Jutro: ${o.name} — ${amount}${who}`;
+    return `Za 7 dni: ${o.name} — ${amount}${who}, termin ${fmtDate(due)}`;
+  }
+
+  // Which reminders are due right now, given today's date and what was sent.
+  function pendingReminders() {
+    const today = todayStr();
+    const marks = sentMarks();
+    const confMap = confirmationMap();
+    const out = [];
+    for (const o of obligations()) {
+      // window: from the oldest occurrence that can still turn "missed"
+      // through the furthest look-ahead we warn about
+      const from = addDays(today, -(GRACE_DAYS + 1));
+      const to = addDays(today, REMIND_AHEAD[0]);
+      for (const due of occurrencesBetween(o.cycle, from, to)) {
+        const status = occStatus(o.id, due, confMap);
+        if (status === "confirmed") continue;
+        const left = daysBetween(today, due);
+        let stage = null;
+        if (status === "missed") stage = "missed";
+        else if (REMIND_AHEAD.includes(left)) stage = `d${left}`;
+        if (!stage) continue;
+        const key = `${o.id}|${due}|${stage}`;
+        if (marks[key]) continue;
+        out.push({
+          key,
+          title: "Terminarz",
+          message: reminderText(o, due, stage),
+        });
+      }
+    }
+    return out;
+  }
+
+  async function runReminders() {
+    const pending = pendingReminders();
+    if (!pending.length) return 0;
+    const marks = { ...sentMarks() };
+    let sent = 0;
+    for (const r of pending) {
+      try {
+        await cl.notify(r.title, r.message);
+        marks[r.key] = todayStr();
+        sent++;
+      } catch (err) {
+        // brak uprawnienia "notify" albo notyfikacje niedostępne — addon ma
+        // działać dalej, więc tylko log i żadnego znacznika (spróbuje ponownie)
+        cl.log(
+          "powiadomienie odrzucone:",
+          err && err.message ? err.message : err,
+        );
+        break;
+      }
+    }
+    if (sent) await put(K_SENT, marks);
+    return sent;
+  }
+
+  // ------------------------------------------------------------- widget (task 4/6)
+  // Five nearest items: everything already missed first (red), then upcoming.
+  function upcomingItems(limit = 5) {
+    const confMap = confirmationMap();
+    const today = todayStr();
+    const out = [];
+    for (const o of obligations()) {
+      const { past, next } = obligationOccurrences(o);
+      for (const due of past) {
+        const status = occStatus(o.id, due, confMap);
+        if (status === "missed" || status === "due")
+          out.push({ o, due, status, sort: 0 });
+      }
+      if (next) out.push({ o, due: next, status: "upcoming", sort: 1 });
+    }
+    return out
+      .sort((a, b) => a.sort - b.sort || a.due.localeCompare(b.due))
+      .slice(0, limit)
+      .map((it) => ({ ...it, late: daysBetween(it.due, today) }));
+  }
+
+  function renderUpcomingWidget(el) {
+    injectStyle();
+    const items = upcomingItems();
+    el.innerHTML = items.length
+      ? `<div class="tz-widget">${items
+          .map((it) => {
+            const ow = ownerById(it.o.ownerId);
+            return `<div class="tz-widget-row ${it.status}">
+              <span class="tz-w-date">${esc(fmtDate(it.due).slice(0, 5))}</span>
+              <span class="tz-w-name" title="${escAttr(it.o.name)}">${esc(it.o.name)}</span>
+              ${ow ? `<span class="tz-chip" style="background:${escAttr(ow.color)}">${esc(ow.name)}</span>` : ""}
+              <span class="tz-amt">${formatAmount(it.o.amount)}</span>
+            </div>`;
+          })
+          .join("")}</div>`
+      : `<div class="widget-empty">Brak nadchodzących płatności</div>`;
+    el.onclick = () => cl.openModule("main", "obligations");
+  }
+
+  // Widget instances are re-rendered by the host; a live one also refreshes
+  // itself when obligations change so confirming from the list is reflected.
+  const widgetEls = new Set();
+  function refreshWidgets() {
+    for (const el of [...widgetEls]) {
+      if (!el.isConnected) {
+        widgetEls.delete(el);
+        continue;
+      }
+      renderUpcomingWidget(el);
+    }
+  }
+
   // ------------------------------------------------------------- style
   function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -494,6 +629,14 @@ export default async function activate(cl) {
       .tz-ycell .dot.missed{background:var(--error,#f38ba8);}
       .tz-ycell.today{outline:1px solid var(--accent,#89b4fa);border-radius:3px;}
       .tz-ysum{margin-top:6px;font-size:12px;color:var(--text-secondary,#bac2de);}
+      /* widget (4/6) */
+      .tz-widget{display:flex;flex-direction:column;gap:3px;}
+      .tz-widget-row{display:flex;align-items:center;gap:6px;font-size:12px;min-width:0;}
+      .tz-widget-row.missed .tz-w-date,.tz-widget-row.missed .tz-w-name{color:var(--error,#f38ba8);}
+      .tz-widget-row.due .tz-w-date{color:#f9e2af;}
+      .tz-w-date{font-variant-numeric:tabular-nums;color:var(--text-muted,#9399b2);white-space:nowrap;}
+      .tz-w-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .tz-widget-row .tz-chip{font-size:10px;padding:1px 6px;}
     `;
     document.head.appendChild(s);
   }
@@ -1489,10 +1632,33 @@ export default async function activate(cl) {
     },
   });
 
+  cl.registerWidget({
+    id: "upcoming",
+    title: "Nadchodzące płatności",
+    icon: "📅",
+    dashboard: true,
+    render(el) {
+      widgetEls.add(el);
+      renderUpcomingWidget(el);
+    },
+  });
+
   await initStore();
+
+  // Reminders: once at startup, then hourly. The timer is cleared on dispose
+  // so a hot reload does not leave a second one running.
+  runReminders().catch((err) => cl.log("przypomnienia:", err));
+  remindTimer = setInterval(() => {
+    runReminders().catch((err) => cl.log("przypomnienia:", err));
+  }, REMIND_INTERVAL_MS);
+
   cl.log("Terminarz ready");
 
   return () => {
+    if (remindTimer) clearInterval(remindTimer);
+    remindTimer = null;
+    widgetEls.clear();
     oblEl = null;
+    calEl = null;
   };
 }
