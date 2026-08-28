@@ -2121,6 +2121,27 @@ export default async function activate(cl) {
 
   // Items of a range grouped by due date — the shape both the year view and
   // the month widget need.
+  // Obce wydarzenia jako drugi rodzaj pozycji — tylko do odczytu, bez kwoty
+  // i bez potwierdzania. Widoki traktują je jak każdą inną pozycję dnia, bo od
+  // 3/6 renderują ogólne itemy.
+  function externalItems(startStr, endStr) {
+    if (!prefs().showGoogle) return [];
+    return externalCache()
+      .items.filter((e) => {
+        const day = (e.start || "").slice(0, 10);
+        return day >= startStr && day <= endStr;
+      })
+      .map((e) => ({
+        kind: "google",
+        due: (e.start || "").slice(0, 10),
+        time: e.allDay ? "" : (e.start || "").slice(11, 16),
+        status: "external",
+        title: e.title,
+        account: e.account,
+        amount: null,
+      }));
+  }
+
   function itemsByDay(startStr, endStr, confMap, list) {
     const byDay = new Map();
     for (const it of itemsForRange(
