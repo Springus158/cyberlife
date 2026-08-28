@@ -731,9 +731,24 @@ export default async function activate(cl) {
   function gcalErrors() {
     return cache[K_GERR] && typeof cache[K_GERR] === "object" ? cache[K_GERR] : {};
   }
+  // Surowy błąd potrafi mieć pełny URL Google i pół strony tekstu — w dymku
+  // przy pozycji liczy się przyczyna, nie ślad techniczny.
+  function friendlyGcalError(message) {
+    const msg = String(message || "");
+    if (/connection lost|no such host|dial tcp|Failed to fetch|NetworkError|ECONNREFUSED|timeout/i.test(msg))
+      return "Brak połączenia z Google — spróbuję ponownie przy następnym uruchomieniu";
+    if (/401|invalid_grant|unauthorized/i.test(msg))
+      return "Google odrzuciło autoryzację — podłącz konto ponownie w Ustawieniach";
+    if (/403|insufficient|forbidden/i.test(msg))
+      return "Brak uprawnień do tego kalendarza";
+    if (/404|not found/i.test(msg))
+      return "Kalendarz jest niedostępny — sprawdź udostępnienie w Ustawieniach";
+    return msg.length > 160 ? msg.slice(0, 157) + "…" : msg;
+  }
+
   async function setGcalError(oblId, message) {
     const errs = { ...gcalErrors() };
-    if (message) errs[oblId] = message;
+    if (message) errs[oblId] = friendlyGcalError(message);
     else delete errs[oblId];
     await put(K_GERR, errs);
   }
