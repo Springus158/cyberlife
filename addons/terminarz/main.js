@@ -716,6 +716,11 @@ export default async function activate(cl) {
   const GCAL_HORIZON_MONTHS = 12;
   const GCAL_LOCAL = ""; // wartość pola „Kalendarz" dla pozycji tylko lokalnych
   const GCAL_NOTE = "Cyber Life · Terminarz";
+  // Znacznik w opisie wydarzenia wiąże je z konkretnym zobowiązaniem. Dzięki
+  // niemu stan uzgadniamy z Google, a nie z lokalną notatką, która może się
+  // rozjechać (dwie instancje addonu, przerwany zapis, ręczne kasowanie).
+  const gcalTag = (oblId) => `#terminarz:${oblId}`;
+  const gcalNoteFor = (oblId) => `${GCAL_NOTE}\n${gcalTag(oblId)}`;
   let sharedCalendars = []; // [{id, label}] — puste, gdy Google niepodłączone
 
   function gcalMap() {
@@ -775,90 +780,140 @@ export default async function activate(cl) {
   // Doprowadza Google do stanu zgodnego z zobowiązaniem: tworzy brakujące
   // eventy, poprawia tytuły, kasuje nadmiarowe i przenosi je po zmianie
   // kalendarza. Błąd nie przerywa zapisu lokalnego — zostaje ślad w K_GERR.
+  // Wydarzenia tego zobowiązania faktycznie obecne w kalendarzu, po dacie.
+  // Duplikaty na ten sam dzień trafiają do listy „extra" do skasowania.
+  async function existingEvents(calendarId, oblId, from, to) {
+    const events = await cl.api(
+      `/api/calendar/events?calendar=${encodeURIComponent(calendarId)}&from=${from}&to=${to}`,
+    );
+    const tag = gcalTag(oblId);
+    const byDate = new Map();
+    const extra = [];
+    for (const ev of events || []) {
+      if (!ev || !(ev.note || "").includes(tag)) continue;
+      if (byDate.has(ev.start)) extra.push(ev);
+      else byDate.set(ev.start, ev);
+    }
+    return { byDate, extra };
+  }
+
   async function syncObligation(o) {
     if (!o) return;
     const target = o.calendarId || GCAL_LOCAL;
     const confMap = confirmationMap();
-    let map = gcalMap();
-    const mine = map.filter((m) => m.k.startsWith(`${o.id}|`));
     const wanted = target ? horizonOccurrences(o) : [];
     const wantedSet = new Set(wanted);
-    let changed = false;
+    // Uzgadniamy z każdym kalendarzem, w którym mamy ślad tego zobowiązania,
+    // żeby po zmianie kalendarza posprzątać także ten poprzedni.
+    const touched = new Set(
+      gcalMap()
+        .filter((m) => m.k.startsWith(`${o.id}|`))
+        .map((m) => m.calendar),
+    );
+    if (target) touched.add(target);
+    if (!touched.size) {
+      await setGcalError(o.id, "");
+      return;
+    }
 
+    const today = todayStr();
+    const from = today;
+    const to = addMonths(today, GCAL_HORIZON_MONTHS);
+    const fresh = [];
     try {
-      // 1. skasuj to, czego nie powinno być (poza horyzontem, w starym
-      //    kalendarzu albo po przełączeniu na „Lokalny")
-      for (const entry of mine) {
-        const due = entry.k.slice(o.id.length + 1);
-        const stale = !wantedSet.has(due) || entry.calendar !== target;
-        if (!stale) continue;
-        await cl.api("/api/calendar/events", {
-          op: "delete",
-          calendar: entry.calendar,
-          event: entry.event,
-        });
-        map = map.filter((m) => m !== entry);
-        changed = true;
-      }
-
-      // 2. utwórz brakujące i popraw tytuły istniejących
-      for (const due of wanted) {
-        const key = occKey(o.id, due);
-        const existing = map.find((m) => m.k === key && m.calendar === target);
-        const title = eventTitle(o, !!confMap[key]);
-        if (existing) {
+      for (const calId of touched) {
+        const { byDate, extra } = await existingEvents(calId, o.id, from, to);
+        // 1. skasuj duplikaty i wszystko, czego tu być nie powinno
+        const doomed = [...extra];
+        for (const [date, ev] of byDate) {
+          if (calId !== target || !wantedSet.has(date)) doomed.push(ev);
+        }
+        for (const ev of doomed) {
           await cl.api("/api/calendar/events", {
-            op: "update",
-            calendar: target,
-            event: existing.event,
-            title,
-            date: due,
+            op: "delete",
+            calendar: calId,
+            event: ev.id,
           });
-        } else {
-          const created = await cl.api("/api/calendar/events", {
-            calendar: target,
-            title,
-            date: due,
-            note: GCAL_NOTE,
-          });
-          if (created && created.id) {
-            map.push({ k: key, event: created.id, calendar: target });
-            changed = true;
+          byDate.delete(ev.start);
+        }
+        if (calId !== target) continue;
+
+        // 2. popraw tytuły istniejących i utwórz brakujące
+        for (const due of wanted) {
+          const key = occKey(o.id, due);
+          const title = eventTitle(o, !!confMap[key]);
+          const ev = byDate.get(due);
+          if (ev) {
+            if (ev.title !== title) {
+              await cl.api("/api/calendar/events", {
+                op: "update",
+                calendar: target,
+                event: ev.id,
+                title,
+              });
+            }
+            fresh.push({ k: key, event: ev.id, calendar: target });
+          } else {
+            const created = await cl.api("/api/calendar/events", {
+              calendar: target,
+              title,
+              date: due,
+              note: gcalNoteFor(o.id),
+            });
+            if (created && created.id)
+              fresh.push({ k: key, event: created.id, calendar: target });
           }
         }
       }
-      if (changed) await saveGcalMap(map);
+      // mapowanie odtwarzane ze stanu Google, nie doklejane do starego
+      await replaceObligationMapping(o.id, fresh);
       await setGcalError(o.id, "");
     } catch (err) {
       const msg = err && err.message ? err.message : String(err);
-      if (changed) await saveGcalMap(map);
+      await replaceObligationMapping(o.id, fresh);
       await setGcalError(o.id, msg);
       cl.log(`sync z Google nieudany dla „${o.name}":`, msg);
     }
   }
 
+  // Podmienia wpisy jednego zobowiązania, czytając mapę tuż przed zapisem,
+  // żeby równoległy zapis innej pozycji nie został nadpisany.
+  async function replaceObligationMapping(oblId, entries) {
+    const rest = gcalMap().filter((m) => !m.k.startsWith(`${oblId}|`));
+    await saveGcalMap([...rest, ...entries]);
+  }
+
   // Usuwa wszystkie eventy zobowiązania (przy kasowaniu pozycji)
   async function dropGoogleEvents(oblId) {
-    const map = gcalMap();
-    const mine = map.filter((m) => m.k.startsWith(`${oblId}|`));
-    if (!mine.length) {
+    const calendars = new Set(
+      gcalMap()
+        .filter((m) => m.k.startsWith(`${oblId}|`))
+        .map((m) => m.calendar),
+    );
+    if (!calendars.size) {
       await setGcalError(oblId, "");
       return;
     }
-    let rest = map;
+    const today = todayStr();
     try {
-      for (const entry of mine) {
-        await cl.api("/api/calendar/events", {
-          op: "delete",
-          calendar: entry.calendar,
-          event: entry.event,
-        });
-        rest = rest.filter((m) => m !== entry);
+      for (const calId of calendars) {
+        const { byDate, extra } = await existingEvents(
+          calId,
+          oblId,
+          today,
+          addMonths(today, GCAL_HORIZON_MONTHS),
+        );
+        for (const ev of [...byDate.values(), ...extra]) {
+          await cl.api("/api/calendar/events", {
+            op: "delete",
+            calendar: calId,
+            event: ev.id,
+          });
+        }
       }
-      await saveGcalMap(rest);
+      await replaceObligationMapping(oblId, []);
       await setGcalError(oblId, "");
     } catch (err) {
-      await saveGcalMap(rest);
       cl.log("usuwanie eventów Google nieudane:", err && err.message ? err.message : err);
     }
   }
