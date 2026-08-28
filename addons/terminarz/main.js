@@ -389,14 +389,13 @@ export default async function activate(cl) {
     await saveObligations(list);
     if (prev && JSON.stringify(prev.cycle) !== JSON.stringify(rec.cycle))
       await reconcileConfirmations(rec);
-    // Google w tle: zapis lokalny jest już zrobiony, więc błąd sieci
-    // zostawia tylko ostrzeżenie przy pozycji
-    await syncObligation(rec);
-    if (prev && prev.calendarId && prev.calendarId !== rec.calendarId) {
-      // przeniesienie: stary kalendarz sprzątany przez syncObligation,
-      // ale wpis o błędzie starego kalendarza już nie dotyczy
-      await setGcalError(rec.id, gcalErrors()[rec.id] || "");
-    }
+    // Google idzie w tle — zapis lokalny jest już zrobiony, a synchronizacja
+    // 12 wystąpień to kilkanaście żądań sieciowych. Czekanie na nią trzymało
+    // otwarty formularz i kusiło do ponownego kliknięcia „Zapisz", co
+    // uruchamiało drugi przebieg i tworzyło duplikaty.
+    syncObligation(rec)
+      .then(() => oblEl && renderObligations(oblEl))
+      .catch((err) => cl.log("sync w tle:", err));
   }
   async function removeObligation(id) {
     await dropGoogleEvents(id);
@@ -1305,7 +1304,9 @@ export default async function activate(cl) {
         .forEach((e) => (e.style.display = "none"));
     }
 
+    let saving = false;
     async function onSave() {
+      if (saving) return; // klik w trakcie zapisu nie może zapisać drugi raz
       captureCycle();
       clearErrs();
       let ok = true;
@@ -1362,7 +1363,17 @@ export default async function activate(cl) {
         contractEnd: (f.contractEnd || "").trim(),
         note: (f.note || "").trim(),
       };
-      await upsertObligation(rec);
+      saving = true;
+      const saveBtn = modal.querySelector("#f-save");
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Zapisywanie…";
+      }
+      try {
+        await upsertObligation(rec);
+      } finally {
+        saving = false;
+      }
       close();
       if (afterSave) afterSave();
     }
