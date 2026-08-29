@@ -17,7 +17,8 @@ import {
   GetGlobalPrompts, GetProjectPrompts, CreatePrompt, CreateGlobalPrompt,
   UpdatePrompt, UpdateGlobalPrompt, DeletePrompt, DeleteGlobalPrompt,
   TogglePromptPinned, IncrementPromptUsage, WriteITermText,
-  AddonsList, SetAddonEnabled, AddonsReload, OpenAddonsDir
+  AddonsList, SetAddonEnabled, AddonsReload, OpenAddonsDir,
+  GetCalendarConfig, CalendarConnect, CalendarDisconnect, CalendarSetShared
 } from '../../wailsjs/go/main/App';
 import { applyPromptWrappers } from './tools-panel.js';
 import { builtinOn, setBuiltinOn, builtinName } from './addon-state.js';
@@ -58,6 +59,7 @@ const SETTINGS_GROUPS = [
       { id: 'addons', icon: '🧩', label: 'Manage Addons' },
       { id: 'widgets', icon: '🧱', label: 'Widgets' },
       { id: 'gmail', icon: '✉️', label: 'Gmail', addon: 'gmail' },
+      { id: 'calendar', icon: '📆', label: 'Google Calendar' },
       { id: 'jira', icon: '🔄', label: 'Jira', addon: 'jira' },
       { id: 'elevenlabs', icon: '🎙️', label: 'ElevenLabs', addon: 'elevenlabs' },
     ],
@@ -125,6 +127,7 @@ async function loadSettings() {
     GetGlobalPromptPrefix(), GetGlobalPromptSuffix(), GetJiraSettings()
   ]);
   const gmail = await GetGmailConfig().catch(() => null);
+  const calendarAccounts = await GetCalendarConfig().catch(() => null);
   const agentSkills = await GetAgentSkills().catch(() => []);
   const addonsInfo = await AddonsList().catch((err) => {
     console.warn('addons list failed:', err);
@@ -164,6 +167,7 @@ async function loadSettings() {
       email: jira?.email || '',
       apiToken: jira?.apiToken || ''
     },
+    calendar: { accounts: calendarAccounts || [] },
     gmail: {
       enabled: !!gmail?.enabled,
       mcpEnabled: !!gmail?.mcpEnabled,
@@ -241,6 +245,7 @@ function renderSection(id) {
     case 'prompts': return renderPrompts();
     case 'jira': return renderJira();
     case 'gmail': return renderGmail();
+    case 'calendar': return renderCalendar();
     case 'agentskills': return renderAgentSkills();
     case 'addons': return renderAddonsSection();
     case 'runners': return renderRunners();
@@ -1043,6 +1048,77 @@ function renderGmail() {
   `;
 }
 
+function renderCalendar() {
+  const accounts = settings.calendar?.accounts || [];
+  return `
+    <div class="settings-section">
+      <h2 class="settings-section-title">📆 Google Calendar</h2>
+      <p class="settings-section-desc">
+        Connect Google accounts so addons can read and write calendar events.
+        Only the calendars you tick below are visible to addons — the rest stay
+        private even though the token can read them.
+      </p>
+
+      <div class="settings-field">
+        <label class="settings-label">Connected accounts</label>
+        <div id="settingsCalendarAccounts">
+          ${accounts.length === 0 ? '<p class="settings-hint">No accounts connected yet.</p>' : accounts.map(acc => `
+            <div class="settings-field" style="margin-bottom: 18px;">
+              <div class="gmail-account-row">
+                <span class="gmail-account-email">${escapeHtml(acc.email)}</span>
+                <button class="settings-btn calendar-account-remove" data-email="${escapeAttr(acc.email)}">Disconnect</button>
+              </div>
+              ${acc.error
+                ? `<p class="settings-hint" style="color: var(--error, #f38ba8);">${escapeHtml(acc.error)}</p>`
+                : (acc.calendars || []).length === 0
+                  ? '<p class="settings-hint">No calendars on this account.</p>'
+                  : `<div style="margin: 6px 0 0 4px;">${acc.calendars.map(cal => `
+                      <label class="settings-checkbox" title="${escapeAttr(cal.readOnly ? 'Read-only calendar — addons cannot write to it' : 'Share with addons')}">
+                        <input type="checkbox" class="calendar-share-toggle"
+                          data-email="${escapeAttr(acc.email)}" data-calendar="${escapeAttr(cal.id)}"
+                          ${cal.shared ? 'checked' : ''}>
+                        <span>${escapeHtml(cal.name)}${cal.primary ? ' <em>(primary)</em>' : ''}${cal.readOnly ? ' <em>(read-only)</em>' : ''}</span>
+                      </label>`).join('')}</div>`}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="settings-field" style="margin-top: 24px;">
+        <label class="settings-label">Add account</label>
+        <p class="settings-hint" style="margin: 0 0 10px;">
+          Each account uses its own OAuth client, so a personal Google Cloud project and a
+          company one can live side by side. Credentials are stored per account.
+        </p>
+        <input type="text" id="settingsCalendarClientId" class="settings-input" autocomplete="off"
+          placeholder="OAuth Client ID (xxxx.apps.googleusercontent.com)" value=""
+          style="margin-bottom: 8px;">
+        <div class="settings-key-row">
+          <input type="password" id="settingsCalendarSecret" class="settings-input" autocomplete="off"
+            placeholder="OAuth Client Secret (GOCSPX-...)" value="">
+          <button class="settings-btn-icon" id="settingsCalendarSecretVis" title="Show / hide">👁</button>
+        </div>
+        <div class="settings-actions" style="margin-top: 10px;">
+          <button class="settings-btn primary" id="settingsCalendarAddAccount">+ Authorize &amp; add account</button>
+          <span class="settings-save-note" id="settingsCalendarNote"></span>
+        </div>
+      </div>
+
+      <div class="settings-info-box">
+        <div class="settings-info-title">One-time Google Cloud setup</div>
+        1. Open <a href="#" id="settingsCalendarConsoleLink">console.cloud.google.com</a> → create a project.<br>
+        2. <em>APIs &amp; Services → Library</em> → enable <strong>Google Calendar API</strong>.<br>
+        3. <em>OAuth consent screen</em> → External → add your Google addresses as test users
+        (or publish the app so tokens don't expire weekly).<br>
+        4. <em>Credentials → Create credentials → OAuth client ID → Desktop app</em> —
+        copy the Client ID and Secret above.<br>
+        <strong>Changing the requested scope later invalidates stored tokens</strong> — every
+        account has to authorize again.
+      </div>
+    </div>
+  `;
+}
+
 function renderTerminal() {
   return `
     <div class="settings-section">
@@ -1190,6 +1266,76 @@ function wireSection(id) {
     document.getElementById('settingsSidebarWidth')?.addEventListener('change', saveWidths);
     document.querySelectorAll('.settings-module-width').forEach(inp =>
       inp.addEventListener('change', saveWidths));
+  }
+
+  if (id === 'calendar') {
+    const secretInput = document.getElementById('settingsCalendarSecret');
+    document.getElementById('settingsCalendarSecretVis')?.addEventListener('click', () => {
+      if (secretInput) secretInput.type = secretInput.type === 'password' ? 'text' : 'password';
+    });
+    document.getElementById('settingsCalendarConsoleLink')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      import('../../wailsjs/runtime/runtime').then(({ BrowserOpenURL }) =>
+        BrowserOpenURL('https://console.cloud.google.com/apis/credentials'));
+    });
+    const note = (text, isError) => {
+      const el = document.getElementById('settingsCalendarNote');
+      if (!el) return;
+      el.textContent = text;
+      el.style.color = isError ? 'var(--error, #f38ba8)' : '';
+    };
+    const reload = async () => {
+      settings.calendar.accounts = await GetCalendarConfig().catch(() => []);
+      const content = document.getElementById('settingsContent');
+      if (content) { content.innerHTML = renderSection('calendar'); wireSection('calendar'); }
+    };
+    document.getElementById('settingsCalendarAddAccount')?.addEventListener('click', async () => {
+      const clientId = document.getElementById('settingsCalendarClientId')?.value.trim() || '';
+      const clientSecret = secretInput?.value.trim() || '';
+      if (!clientId || !clientSecret) {
+        note('Paste the OAuth Client ID and Secret first', true);
+        return;
+      }
+      note('Waiting for Google authorization in the browser…');
+      try {
+        const email = await CalendarConnect(clientId, clientSecret);
+        note(`Connected ${email}`);
+        await reload();
+      } catch (err) {
+        note(String(err?.message || err), true);
+      }
+    });
+    document.querySelectorAll('.calendar-account-remove').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const email = btn.dataset.email;
+        if (!confirm(`Disconnect ${email}? Addons lose access to its calendars.`)) return;
+        try {
+          await CalendarDisconnect(email);
+          await reload();
+        } catch (err) {
+          note(String(err?.message || err), true);
+        }
+      });
+    });
+    // Sharing is per account: collect every ticked calendar of that account so
+    // one toggle never drops the others.
+    document.querySelectorAll('.calendar-share-toggle').forEach(box => {
+      box.addEventListener('change', async () => {
+        const email = box.dataset.email;
+        const ids = [...document.querySelectorAll(`.calendar-share-toggle[data-email="${CSS.escape(email)}"]`)]
+          .filter(b => b.checked)
+          .map(b => b.dataset.calendar);
+        try {
+          await CalendarSetShared(email, ids);
+          const acc = (settings.calendar.accounts || []).find(a => a.email === email);
+          if (acc) for (const cal of acc.calendars || []) cal.shared = ids.includes(cal.id);
+          note(ids.length ? `Shared ${ids.length} calendar(s) with addons` : 'No calendars shared with addons');
+        } catch (err) {
+          note(String(err?.message || err), true);
+          box.checked = !box.checked;
+        }
+      });
+    });
   }
 
   if (id === 'gmail') {

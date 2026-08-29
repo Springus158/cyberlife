@@ -31,6 +31,8 @@ var KnownPermissions = []string{
 	"projects", "tasks", "notes", "prompts", "system", "gmail", "addons",
 	// not an API group — gates cl.notify() (system notifications)
 	"notify",
+	// Google Calendar accounts and events shared with addons
+	"calendar",
 }
 
 // hostPattern accepts dotted hostnames, optionally with a "*." wildcard

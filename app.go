@@ -16,6 +16,7 @@ import (
 	"github.com/kalor62/cyberlife/internal/agentskills"
 	"github.com/kalor62/cyberlife/internal/api"
 	"github.com/kalor62/cyberlife/internal/automations"
+	"github.com/kalor62/cyberlife/internal/calendar"
 	"github.com/kalor62/cyberlife/internal/claude"
 	"github.com/kalor62/cyberlife/internal/git"
 	"github.com/kalor62/cyberlife/internal/gmail"
@@ -43,6 +44,7 @@ type App struct {
 	apiServer        *api.Server
 	stopBackground   chan struct{}
 	gmailManager     *gmail.Manager
+	calendarManager  *calendar.Manager
 	gmailContacts    map[string]gmailContactsCache
 	voiceProcess     *exec.Cmd
 	voiceStdin       io.WriteCloser
@@ -98,6 +100,12 @@ func (a *App) startup(ctx context.Context) {
 		a.automationEngine.StartCron()
 		go a.pollMailForAutomations()
 
+		// Calendar manager must exist before the API server registers its hooks
+		a.calendarManager = calendar.NewManager()
+		a.calendarManager.SetTokenRefreshHandler(func(email, tokenJSON string) {
+			a.stateManager.UpdateCalendarToken(email, tokenJSON)
+		})
+
 		// Agent-facing surface: local REST+MCP API and built-in skills
 		a.apiServer = api.NewServer(a.stateManager, api.Hooks{
 			OnChange: func(projectID string) {
@@ -146,7 +154,8 @@ func (a *App) startup(ctx context.Context) {
 				a.syncAgentSkills()
 				runtime.EventsEmit(a.ctx, "addons-changed", nil)
 			},
-			Notify: a.automationNotify,
+			Notify:   a.automationNotify,
+			Calendar: a.calendarHooks(),
 		})
 		a.apiServer.Start()
 		a.syncAgentSkills()

@@ -30,6 +30,18 @@ export function AddonsReload() {
   return window['go']['main']['App']['AddonsReload']();
 }
 
+export function CalendarConnect(arg1, arg2) {
+  return window['go']['main']['App']['CalendarConnect'](arg1, arg2);
+}
+
+export function CalendarDisconnect(arg1) {
+  return window['go']['main']['App']['CalendarDisconnect'](arg1);
+}
+
+export function CalendarSetShared(arg1, arg2) {
+  return window['go']['main']['App']['CalendarSetShared'](arg1, arg2);
+}
+
 export function CheckDependencies() {
   return window['go']['main']['App']['CheckDependencies']();
 }
@@ -164,6 +176,10 @@ export function GetAutomationRules() {
 
 export function GetAutomationRuns(arg1) {
   return window['go']['main']['App']['GetAutomationRuns'](arg1);
+}
+
+export function GetCalendarConfig() {
+  return window['go']['main']['App']['GetCalendarConfig']();
 }
 
 export function GetClaudeAccounts() {

@@ -140,6 +140,8 @@ type AppState struct {
 	Jira *JiraSettings `json:"jira,omitempty"`
 	// Gmail integration (multi-account email client)
 	Gmail *GmailSettings `json:"gmail,omitempty"`
+
+	Calendar *CalendarSettings `json:"calendar,omitempty"`
 	// Built-in agent skills: skill id -> enabled. Missing key = skill default.
 	// Disabled skills are uninstalled from ~/.claude/skills and their API
 	// endpoints reject calls.
@@ -306,6 +308,24 @@ type GmailAccount struct {
 	ClientID     string `json:"clientId,omitempty"`
 	ClientSecret string `json:"clientSecret,omitempty"`
 	McpEnabled   bool   `json:"mcpEnabled,omitempty"`
+}
+
+// CalendarSettings holds the Google Calendar accounts the user connected.
+// Credentials live per account (like Gmail) so separate Google Cloud projects
+// per mailbox work.
+type CalendarSettings struct {
+	Accounts []CalendarAccount `json:"accounts"`
+}
+
+// CalendarAccount is one authorized Google account. Shared lists the calendar
+// ids the user ticked as visible to addons — everything else stays private to
+// the app even though the token can read it.
+type CalendarAccount struct {
+	Email        string   `json:"email"`
+	TokenJSON    string   `json:"tokenJson"`
+	ClientID     string   `json:"clientId,omitempty"`
+	ClientSecret string   `json:"clientSecret,omitempty"`
+	Shared       []string `json:"shared,omitempty"`
 }
 
 // JiraSettings configures the Jira REST integration used to fetch issue details
