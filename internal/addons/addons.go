@@ -29,6 +29,8 @@ var Categories = []string{
 var KnownPermissions = []string{
 	"board", "health", "auto", "widgets", "term",
 	"projects", "tasks", "notes", "prompts", "system", "gmail", "addons",
+	// not an API group — gates cl.notify() (system notifications)
+	"notify",
 }
 
 // hostPattern accepts dotted hostnames, optionally with a "*." wildcard

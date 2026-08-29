@@ -146,6 +146,7 @@ func (a *App) startup(ctx context.Context) {
 				a.syncAgentSkills()
 				runtime.EventsEmit(a.ctx, "addons-changed", nil)
 			},
+			Notify: a.automationNotify,
 		})
 		a.apiServer.Start()
 		a.syncAgentSkills()
