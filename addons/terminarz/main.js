@@ -1,8 +1,10 @@
-// Terminarz — recurring/scheduled obligations register (task 1/6 of #2).
+// Terminarz — recurring/scheduled obligations register (tasks 1/6 + 2/6 of #2).
 //
 // A local register of cyclic commitments (insurance, leasing, taxes, domains,
-// subscriptions) each with an OWNER. This is the foundation: the calendar,
-// period statuses and reminders from later tasks build on this data.
+// subscriptions) each with an OWNER. Task 2/6 adds the period engine: every
+// obligation generates occurrences (due dates), each occurrence has a status
+// (upcoming → due → confirmed / missed) and can be confirmed with the real
+// payment date and amount.
 //
 // Single-file on purpose: hot reload (`addons_reload`) only re-imports the
 // ENTRY, so keeping everything here means every edit reloads cleanly.
@@ -26,12 +28,32 @@ export default async function activate(cl) {
   );
 
   const MONTHS = [
-    "styczeń", "luty", "marzec", "kwiecień", "maj", "czerwiec",
-    "lipiec", "sierpień", "wrzesień", "październik", "listopad", "grudzień",
+    "styczeń",
+    "luty",
+    "marzec",
+    "kwiecień",
+    "maj",
+    "czerwiec",
+    "lipiec",
+    "sierpień",
+    "wrzesień",
+    "październik",
+    "listopad",
+    "grudzień",
   ];
   const MONTHS_GEN = [
-    "stycznia", "lutego", "marca", "kwietnia", "maja", "czerwca",
-    "lipca", "sierpnia", "września", "października", "listopada", "grudnia",
+    "stycznia",
+    "lutego",
+    "marca",
+    "kwietnia",
+    "maja",
+    "czerwca",
+    "lipca",
+    "sierpnia",
+    "września",
+    "października",
+    "listopada",
+    "grudnia",
   ];
 
   const DEFAULT_OWNERS = [
@@ -89,18 +111,150 @@ export default async function activate(cl) {
     }
   }
 
+  // ------------------------------------------------------------- period engine
+  // Every obligation generates occurrences (due dates). Statuses:
+  //   upcoming  — before the due date
+  //   due       — due date … due date + GRACE_DAYS (needs confirmation)
+  //   confirmed — user confirmed (with real date and optional real amount)
+  //   missed    — past due date + GRACE_DAYS without confirmation
+  const GRACE_DAYS = 3; // karencja — do zmiany, jeśli właściciel uzna inaczej
+  const HISTORY_MONTHS = 12;
+  const HISTORY_SHOWN = 12;
+  const CONTRACT_SOON_DAYS = 60;
+  const QUARTER_MONTHS = [0, 3, 6, 9]; // styczeń, kwiecień, lipiec, październik
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const dateStr = (d) =>
+    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const todayStr = () => dateStr(new Date());
+  const parseDate = (s) => {
+    const [y, m, d] = String(s).split("-").map(Number);
+    return new Date(y, (m || 1) - 1, d || 1);
+  };
+  const addDays = (s, n) => {
+    const d = parseDate(s);
+    d.setDate(d.getDate() + n);
+    return dateStr(d);
+  };
+  const addMonths = (s, n) => {
+    // clamp the day so e.g. 29.02 − 12 mies. nie przeskakuje na 1.03
+    const d = parseDate(s);
+    return mkDue(d.getFullYear(), d.getMonth() + n, d.getDate());
+  };
+  // whole days from a to b (positive when b is later)
+  const daysBetween = (a, b) =>
+    Math.round((parseDate(b) - parseDate(a)) / 86400000);
+  const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+  const mkDue = (y, m, day) =>
+    dateStr(new Date(y, m, Math.min(day, daysInMonth(y, m))));
+  const fmtDate = (s) => {
+    if (!s) return "—";
+    const [y, m, d] = String(s).split("-");
+    return d ? `${d}.${m}.${y}` : s;
+  };
+
+  // All due dates of a cycle within [startStr, endStr] inclusive, sorted.
+  function occurrencesBetween(cycle, startStr, endStr) {
+    if (!cycle || !cycle.type) return [];
+    const out = [];
+    const start = parseDate(startStr);
+    const end = parseDate(endStr);
+    if (cycle.type === "onetime") {
+      if (cycle.date && cycle.date >= startStr && cycle.date <= endStr)
+        out.push(cycle.date);
+      return out;
+    }
+    const day = Number(cycle.day) || 1;
+    for (let y = start.getFullYear(); y <= end.getFullYear(); y++) {
+      let months;
+      if (cycle.type === "monthly") months = [...Array(12).keys()];
+      else if (cycle.type === "quarterly") months = QUARTER_MONTHS;
+      else if (cycle.type === "yearly") months = [Number(cycle.month) || 0];
+      else if (cycle.type === "installments")
+        months = (cycle.months || []).slice().sort((a, b) => a - b);
+      else return [];
+      for (const m of months) {
+        const due = mkDue(y, m, day);
+        if (due >= startStr && due <= endStr) out.push(due);
+      }
+    }
+    return out.sort();
+  }
+
+  // History window start: month of creation, capped at HISTORY_MONTHS back.
+  // Month granularity so an occurrence earlier in the creation month counts
+  // (freshly added obligation with a day already past ⇒ visible as missed).
+  function windowStart(o) {
+    const today = todayStr();
+    const cap = addMonths(today, -HISTORY_MONTHS);
+    const created = o.createdAt || today;
+    const monthStart = created.slice(0, 7) + "-01";
+    return monthStart > cap ? monthStart : cap;
+  }
+
+  const occKey = (oblId, due) => `${oblId}|${due}`;
+
+  function occStatus(oblId, due, confMap) {
+    if (confMap[occKey(oblId, due)]) return "confirmed";
+    const late = daysBetween(due, todayStr());
+    if (late < 0) return "upcoming";
+    if (late <= GRACE_DAYS) return "due";
+    return "missed";
+  }
+
+  // Past occurrences (≤ today, newest first) and the next upcoming one.
+  function obligationOccurrences(o) {
+    const today = todayStr();
+    const past = occurrencesBetween(o.cycle, windowStart(o), today).reverse();
+    const next =
+      occurrencesBetween(o.cycle, addDays(today, 1), addMonths(today, 13))[0] ||
+      null;
+    return { past, next };
+  }
+
+  // The occurrence shown in the "Najbliższy termin" column: the oldest
+  // unresolved past occurrence wins over the next upcoming one.
+  function nearestOccurrence(o, confMap) {
+    const { past, next } = obligationOccurrences(o);
+    const unresolved = past
+      .slice()
+      .reverse()
+      .find((due) => occStatus(o.id, due, confMap) !== "confirmed");
+    if (unresolved)
+      return { due: unresolved, status: occStatus(o.id, unresolved, confMap) };
+    if (next) return { due: next, status: "upcoming" };
+    return null;
+  }
+
+  // "YYYY-MM" contract end → days until the last day of that month (null when unset).
+  function contractDaysLeft(o) {
+    if (!o.contractEnd) return null;
+    const [y, m] = o.contractEnd.split("-").map(Number);
+    if (!y || !m) return null;
+    return daysBetween(todayStr(), mkDue(y, m - 1, 31));
+  }
+
   // ------------------------------------------------------------- store
   // Owners live in one small key; obligations are chunked under a byte cap so a
   // growing list never blows the host's 64KB/value limit (pattern from ksef).
   const MAX_CHUNK_BYTES = 52 * 1024;
   const K_OWNERS = "owners";
   const K_OBL = "obl"; // chunk prefix: obl, obl#2, obl#3, …
+  const K_CONF = "conf"; // confirmations, same chunking: conf, conf#2, …
   let cache = null;
 
   async function initStore() {
     cache = await cl.storage.all();
     if (!Array.isArray(cache[K_OWNERS])) {
       await put(K_OWNERS, DEFAULT_OWNERS.slice());
+    }
+    // 1/6 records predate createdAt — backfill so the period engine has a
+    // history window start for them.
+    const list = obligations();
+    if (list.some((o) => !o.createdAt)) {
+      const today = todayStr();
+      for (const o of list) if (!o.createdAt) o.createdAt = today;
+      await saveObligations(list);
     }
   }
   async function put(key, value) {
@@ -111,18 +265,20 @@ export default async function activate(cl) {
     await cl.storage.remove(key);
     delete cache[key];
   }
-  function oblPartKeys() {
+  function partKeys(prefix) {
+    // numeric suffix sort — plain .sort() would put "#10" before "#2"
+    const idx = (k) => (k.includes("#") ? Number(k.split("#")[1]) : 1);
     return Object.keys(cache)
-      .filter((k) => k === K_OBL || k.startsWith(`${K_OBL}#`))
-      .sort();
+      .filter((k) => k === prefix || k.startsWith(`${prefix}#`))
+      .sort((a, b) => idx(a) - idx(b));
   }
   function owners() {
     return Array.isArray(cache[K_OWNERS]) ? cache[K_OWNERS] : [];
   }
   function obligations() {
-    return oblPartKeys().flatMap((k) => cache[k] || []);
+    return partKeys(K_OBL).flatMap((k) => cache[k] || []);
   }
-  async function saveObligations(list) {
+  async function saveChunked(prefix, list) {
     const parts = [];
     let current = [];
     let bytes = 2;
@@ -138,22 +294,92 @@ export default async function activate(cl) {
     }
     parts.push(current);
     for (let i = 0; i < parts.length; i++) {
-      await put(i === 0 ? K_OBL : `${K_OBL}#${i + 1}`, parts[i]);
+      await put(i === 0 ? prefix : `${prefix}#${i + 1}`, parts[i]);
     }
-    for (const stale of oblPartKeys()) {
-      const idx = stale === K_OBL ? 0 : Number(stale.split("#")[1]) - 1;
+    for (const stale of partKeys(prefix)) {
+      const idx = stale === prefix ? 0 : Number(stale.split("#")[1]) - 1;
       if (idx >= parts.length) await drop(stale);
     }
+  }
+  async function saveObligations(list) {
+    await saveChunked(K_OBL, list);
+  }
+
+  // Confirmations: flat records {k: "oblId|dueDate", date, amount, at}.
+  function confirmations() {
+    return partKeys(K_CONF).flatMap((k) => cache[k] || []);
+  }
+  function confirmationMap() {
+    return Object.fromEntries(confirmations().map((c) => [c.k, c]));
+  }
+  async function addConfirmation(oblId, due, date, amount) {
+    const k = occKey(oblId, due);
+    const list = confirmations().filter((c) => c.k !== k);
+    list.push({ k, date, amount, at: todayStr() });
+    await saveChunked(K_CONF, list);
+  }
+  async function removeConfirmation(oblId, due) {
+    const k = occKey(oblId, due);
+    await saveChunked(
+      K_CONF,
+      confirmations().filter((c) => c.k !== k),
+    );
+  }
+  async function dropConfirmationsFor(oblId) {
+    await saveChunked(
+      K_CONF,
+      confirmations().filter((c) => !c.k.startsWith(`${oblId}|`)),
+    );
+  }
+  // After a cycle edit the generated due dates shift, which would orphan
+  // existing confirmations (paid periods would show up as "missed"). Re-key
+  // each orphan to the nearest newly generated occurrence; drop it when no
+  // occurrence lands within REMAP_MAX_DAYS (its period no longer exists).
+  const REMAP_MAX_DAYS = 45;
+  async function reconcileConfirmations(o) {
+    const valid = occurrencesBetween(
+      o.cycle,
+      windowStart(o),
+      addMonths(todayStr(), 13),
+    );
+    const validSet = new Set(valid);
+    const keyed = new Map(confirmations().map((c) => [c.k, c]));
+    let changed = false;
+    for (const [k, c] of [...keyed]) {
+      if (!k.startsWith(`${o.id}|`)) continue;
+      const due = k.slice(o.id.length + 1);
+      if (validSet.has(due)) continue;
+      changed = true;
+      keyed.delete(k);
+      let best = null;
+      let bestDist = Infinity;
+      for (const d of valid) {
+        const dist = Math.abs(daysBetween(due, d));
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = d;
+        }
+      }
+      if (best != null && bestDist <= REMAP_MAX_DAYS) {
+        const nk = occKey(o.id, best);
+        if (!keyed.has(nk)) keyed.set(nk, { ...c, k: nk });
+      }
+    }
+    if (changed) await saveChunked(K_CONF, [...keyed.values()]);
   }
   async function upsertObligation(rec) {
     const list = obligations();
     const i = list.findIndex((o) => o.id === rec.id);
+    const prev = i >= 0 ? list[i] : null;
     if (i >= 0) list[i] = rec;
     else list.push(rec);
     await saveObligations(list);
+    if (prev && JSON.stringify(prev.cycle) !== JSON.stringify(rec.cycle))
+      await reconcileConfirmations(rec);
   }
   async function removeObligation(id) {
     await saveObligations(obligations().filter((o) => o.id !== id));
+    await dropConfirmationsFor(id);
   }
   async function saveOwners(list) {
     await put(K_OWNERS, list);
@@ -162,7 +388,9 @@ export default async function activate(cl) {
     return owners().find((o) => o.id === id) || null;
   }
   function newId() {
-    return "o" + Math.abs(hashStr(JSON.stringify(obligations()) + Math.random()));
+    return (
+      "o" + Math.abs(hashStr(JSON.stringify(obligations()) + Math.random()))
+    );
   }
   // deterministic-ish id without Date.now/Math.random reliance issues
   function hashStr(s) {
@@ -213,6 +441,23 @@ export default async function activate(cl) {
       .tz-owner-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border,#45475a);}
       .tz-swatch{width:16px;height:16px;border-radius:4px;flex-shrink:0;}
       .tz-soon{margin:60px auto;text-align:center;color:var(--text-muted,#9399b2);}
+      /* period statuses — row tints follow ksefad-row-* from the KSeF addon */
+      .tz-row-due td{background:rgba(249,226,175,.08);}
+      .tz-row-missed td{background:rgba(243,139,168,.10);}
+      .tz-status{font-size:12px;font-weight:600;white-space:nowrap;}
+      .tz-status.upcoming{color:var(--text-secondary,#bac2de);}
+      .tz-status.due{color:#f9e2af;}
+      .tz-status.missed{color:var(--error,#f38ba8);}
+      .tz-status.confirmed{color:var(--success,#a6e3a1);}
+      .tz-due-cell{white-space:nowrap;}
+      .tz-confirm-btn{margin-top:4px;}
+      .tz-badge{display:inline-block;margin-left:8px;padding:1px 8px;border:1px solid var(--error,#f38ba8);color:var(--error,#f38ba8);border-radius:999px;font-size:11px;white-space:nowrap;vertical-align:1px;}
+      .tz-hist td{background:var(--bg-secondary,#181825);padding:6px 10px 12px;}
+      .tz-hist-tbl{width:100%;border-collapse:collapse;font-size:13px;}
+      .tz-hist-tbl th{text-align:left;color:var(--text-muted,#9399b2);font-weight:600;padding:4px 8px;border-bottom:1px solid var(--border,#45475a);}
+      .tz-hist-tbl td{padding:4px 8px;border-bottom:none;background:none;}
+      .tz-hist-title{font-size:12px;color:var(--text-muted,#9399b2);margin:4px 0 6px;}
+      .tz-expand-hint{cursor:pointer;}
     `;
     document.head.appendChild(s);
   }
@@ -262,7 +507,7 @@ export default async function activate(cl) {
     function cycleFields() {
       const c = f.cycle;
       const dayInput = (val) =>
-        `<label class="tz-field"><span>Dzień miesiąca (1–31)</span><input class="tz-input" id="f-day" type="number" min="1" max="31" value="${escAttr(val ?? 1)}"></label>`;
+        `<label class="tz-field"><span>Dzień miesiąca (1–31)</span><input class="tz-input" id="f-day" type="number" min="1" max="31" value="${escAttr(val ?? 1)}"><div class="tz-err" id="err-day" style="display:none"></div></label>`;
       if (c.type === "monthly") return dayInput(c.day);
       if (c.type === "quarterly") return dayInput(c.day);
       if (c.type === "yearly")
@@ -288,7 +533,7 @@ export default async function activate(cl) {
       modal.innerHTML = `
         <h3>${editing ? "Edytuj zobowiązanie" : "Nowe zobowiązanie"}</h3>
         <label class="tz-field"><span>Nazwa *</span>
-          <input class="tz-input" id="f-name" type="text" value="${escAttr(f.name)}" placeholder="np. Leasing Stellantis">
+          <input class="tz-input" id="f-name" type="text" maxlength="120" value="${escAttr(f.name)}" placeholder="np. Leasing Stellantis">
           <div class="tz-err" id="err-name" style="display:none"></div>
         </label>
         <div class="tz-row2">
@@ -296,7 +541,12 @@ export default async function activate(cl) {
             <select class="tz-select" id="f-cat">${CATEGORIES.map((c) => `<option value="${c.id}" ${c.id === f.category ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>
           </label>
           <label class="tz-field"><span>Właściciel</span>
-            <select class="tz-select" id="f-owner">${owners().map((o) => `<option value="${escAttr(o.id)}" ${o.id === f.ownerId ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select>
+            <select class="tz-select" id="f-owner">${owners()
+              .map(
+                (o) =>
+                  `<option value="${escAttr(o.id)}" ${o.id === f.ownerId ? "selected" : ""}>${esc(o.name)}</option>`,
+              )
+              .join("")}</select>
           </label>
         </div>
         <div class="tz-row2">
@@ -319,7 +569,7 @@ export default async function activate(cl) {
         </label>
         <div id="cycle-fields">${cycleFields()}</div>
         <label class="tz-field"><span>Wzorzec z wyciągu (opcjonalnie)</span>
-          <input class="tz-input" id="f-pattern" type="text" value="${escAttr(f.statementPattern || "")}" placeholder="fragment tytułu przelewu">
+          <input class="tz-input" id="f-pattern" type="text" maxlength="200" value="${escAttr(f.statementPattern || "")}" placeholder="fragment tytułu przelewu">
         </label>
         <div class="tz-row2">
           <label class="tz-field"><span>Koniec umowy (opcjonalnie)</span>
@@ -328,7 +578,7 @@ export default async function activate(cl) {
           </label>
         </div>
         <label class="tz-field"><span>Notatka (opcjonalnie)</span>
-          <textarea class="tz-ta" id="f-note">${esc(f.note || "")}</textarea>
+          <textarea class="tz-ta" id="f-note" maxlength="2000">${esc(f.note || "")}</textarea>
         </label>
         <div class="tz-modal-actions">
           <button class="tz-btn ghost" id="f-cancel">Anuluj</button>
@@ -355,9 +605,17 @@ export default async function activate(cl) {
         if (t === "monthly" || t === "quarterly")
           f.cycle = { type: t, day: f.cycle.day || 1 };
         else if (t === "yearly")
-          f.cycle = { type: t, month: f.cycle.month || 0, day: f.cycle.day || 1 };
+          f.cycle = {
+            type: t,
+            month: f.cycle.month || 0,
+            day: f.cycle.day || 1,
+          };
         else if (t === "installments")
-          f.cycle = { type: t, months: f.cycle.months || [], day: f.cycle.day || 1 };
+          f.cycle = {
+            type: t,
+            months: f.cycle.months || [],
+            day: f.cycle.day || 1,
+          };
         else f.cycle = { type: "onetime", date: f.cycle.date || "" };
         modal.querySelector("#cycle-fields").innerHTML = cycleFields();
         wireCycleFields();
@@ -371,14 +629,23 @@ export default async function activate(cl) {
 
     function wireCycleFields() {
       const day = modal.querySelector("#f-day");
-      if (day) day.addEventListener("input", (e) => (f.cycle.day = Number(e.target.value)));
+      if (day)
+        day.addEventListener(
+          "input",
+          (e) => (f.cycle.day = Number(e.target.value)),
+        );
       const month = modal.querySelector("#f-month");
-      if (month) month.addEventListener("change", (e) => (f.cycle.month = Number(e.target.value)));
+      if (month)
+        month.addEventListener(
+          "change",
+          (e) => (f.cycle.month = Number(e.target.value)),
+        );
       const date = modal.querySelector("#f-date");
-      if (date) date.addEventListener("input", (e) => (f.cycle.date = e.target.value));
-      modal.querySelectorAll(".f-instm").forEach((cb) =>
-        cb.addEventListener("change", captureCycle),
-      );
+      if (date)
+        date.addEventListener("input", (e) => (f.cycle.date = e.target.value));
+      modal
+        .querySelectorAll(".f-instm")
+        .forEach((cb) => cb.addEventListener("change", captureCycle));
     }
     function captureCycle() {
       const day = modal.querySelector("#f-day");
@@ -402,7 +669,9 @@ export default async function activate(cl) {
       }
     }
     function clearErrs() {
-      modal.querySelectorAll(".tz-err").forEach((e) => (e.style.display = "none"));
+      modal
+        .querySelectorAll(".tz-err")
+        .forEach((e) => (e.style.display = "none"));
     }
 
     async function onSave() {
@@ -425,6 +694,15 @@ export default async function activate(cl) {
         showErr("#err-months", "Zaznacz co najmniej jeden miesiąc rat");
         ok = false;
       }
+      if (f.cycle.type !== "onetime") {
+        // pusty input → Number("") === 0 → new Date(y, m, 0) cofa termin
+        // o miesiąc; bez tej walidacji zapis przesunąłby wszystkie terminy
+        const d = Number(f.cycle.day);
+        if (!Number.isInteger(d) || d < 1 || d > 31) {
+          showErr("#err-day", "Dzień miesiąca musi być liczbą od 1 do 31");
+          ok = false;
+        }
+      }
       const endVal = (f.contractEnd || "").trim();
       if (endVal && !/^\d{4}-(0[1-9]|1[0-2])$/.test(endVal)) {
         showErr("#err-end", "Format: RRRR-MM (np. 2027-01)");
@@ -441,6 +719,7 @@ export default async function activate(cl) {
 
       const rec = {
         id: f.id || newId(),
+        createdAt: f.createdAt || todayStr(),
         name: f.name.trim(),
         category: f.category,
         ownerId: f.ownerId,
@@ -461,7 +740,11 @@ export default async function activate(cl) {
   }
 
   // ------------------------------------------------------------- confirm
-  function confirmDialog(message, onYes, { danger = true } = {}) {
+  function confirmDialog(
+    message,
+    onYes,
+    { danger = true, yesLabel = "Usuń" } = {},
+  ) {
     injectStyle();
     const bg = document.createElement("div");
     bg.className = "tz-modal-bg";
@@ -470,7 +753,7 @@ export default async function activate(cl) {
         <p style="margin:0 0 16px">${esc(message)}</p>
         <div class="tz-modal-actions">
           <button class="tz-btn ghost" id="c-no">Anuluj</button>
-          <button class="tz-btn ${danger ? "danger" : ""}" id="c-yes">Usuń</button>
+          <button class="tz-btn ${danger ? "danger" : ""}" id="c-yes">${esc(yesLabel)}</button>
         </div>
       </div>`;
     const modal = bg.querySelector(".tz-modal");
@@ -497,11 +780,110 @@ export default async function activate(cl) {
     document.body.appendChild(bg);
   }
 
+  // ------------------------------------------------------------- payment confirmation
+  const STATUS_LABEL = {
+    upcoming: "nadchodząca",
+    due: "do potwierdzenia",
+    missed: "przegapiona",
+    confirmed: "potwierdzona",
+  };
+
+  function openConfirmPayment(o, due, afterSave) {
+    injectStyle();
+    const bg = document.createElement("div");
+    bg.className = "tz-modal-bg";
+    bg.innerHTML = `
+      <div class="tz-modal" style="max-width:420px">
+        <h3>Potwierdź płatność</h3>
+        <p style="margin:0 0 12px">${esc(o.name)} — termin ${esc(fmtDate(due))}</p>
+        <label class="tz-field"><span>Data płatności *</span>
+          <input class="tz-input" id="p-date" type="text" inputmode="numeric" placeholder="RRRR-MM-DD" value="${escAttr(todayStr())}">
+          <div class="tz-err" id="p-err-date" style="display:none"></div>
+        </label>
+        <label class="tz-field"><span>Kwota rzeczywista (zł)</span>
+          <input class="tz-input" id="p-amount" type="number" step="0.01" min="0" value="${escAttr(o.amount)}">
+          <div class="tz-err" id="p-err-amount" style="display:none"></div>
+        </label>
+        <div class="tz-modal-actions">
+          <button class="tz-btn ghost" id="p-cancel">Anuluj</button>
+          <button class="tz-btn" id="p-save">Potwierdź</button>
+        </div>
+      </div>`;
+    const modal = bg.querySelector(".tz-modal");
+    modal.addEventListener("click", (e) => e.stopPropagation());
+    const close = () => {
+      bg.remove();
+      document.removeEventListener("keydown", onEsc);
+    };
+    const onEsc = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        close();
+      }
+    };
+    bg.addEventListener("click", (e) => {
+      if (e.target === bg) close();
+    });
+    document.addEventListener("keydown", onEsc);
+    bg.querySelector("#p-cancel").addEventListener("click", close);
+    bg.querySelector("#p-save").addEventListener("click", async () => {
+      const dv = bg.querySelector("#p-date").value.trim();
+      const errEl = bg.querySelector("#p-err-date");
+      errEl.style.display = "none";
+      if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(dv)) {
+        errEl.textContent = "Podaj datę w formacie RRRR-MM-DD";
+        errEl.style.display = "";
+        return;
+      }
+      const rawAmt = bg.querySelector("#p-amount").value.trim();
+      const amt = rawAmt === "" ? Number(o.amount) : Number(rawAmt);
+      if (!(amt > 0)) {
+        const aErr = bg.querySelector("#p-err-amount");
+        aErr.textContent = "Kwota musi być większa od zera";
+        aErr.style.display = "";
+        return;
+      }
+      await addConfirmation(o.id, due, dv, amt);
+      close();
+      if (afterSave) afterSave();
+    });
+    document.body.appendChild(bg);
+  }
+
   // ------------------------------------------------------------- obligations page
   let oblEl = null;
+  const expandedIds = new Set(); // rows with the occurrence history open
+
+  function historyHtml(o, confMap) {
+    const { past, next } = obligationOccurrences(o);
+    const shown = past.slice(0, HISTORY_SHOWN);
+    if (!shown.length) {
+      return `<div class="tz-hist-title">Brak historii — najbliższy termin: ${esc(next ? fmtDate(next) : "—")}.</div>`;
+    }
+    const rows = shown
+      .map((due) => {
+        const st = occStatus(o.id, due, confMap);
+        const c = confMap[occKey(o.id, due)];
+        return `<tr>
+          <td>${esc(fmtDate(due))}</td>
+          <td><span class="tz-status ${st}">${STATUS_LABEL[st]}</span></td>
+          <td>${c ? esc(fmtDate(c.date)) : "—"}</td>
+          <td class="tz-amt">${c ? formatAmount(c.amount) : "—"}</td>
+          <td>${c ? `<button class="tz-iconbtn tz-undo" data-due="${escAttr(due)}">cofnij</button>` : ""}</td>
+        </tr>`;
+      })
+      .join("");
+    return `<div class="tz-hist-title">Historia wystąpień (ostatnie ${shown.length})</div>
+      <table class="tz-hist-tbl">
+        <thead><tr><th>Termin</th><th>Status</th><th>Zapłacono</th><th>Kwota</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
   function renderObligations(el) {
     oblEl = el;
     injectStyle();
+    const confMap = confirmationMap();
     const list = obligations()
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name, "pl"));
@@ -512,17 +894,48 @@ export default async function activate(cl) {
         const chip = owner
           ? `<span class="tz-chip" style="background:${escAttr(owner.color)}">${esc(owner.name)}</span>`
           : `<span class="tz-hint">—</span>`;
-        return `<tr data-id="${escAttr(o.id)}">
-          <td>${esc(o.name)}<div class="tz-cat">${esc(CATEGORY_LABEL[o.category] || o.category)}</div></td>
+        const near = nearestOccurrence(o, confMap);
+        const rowCls =
+          near && near.status === "missed"
+            ? "tz-row-missed"
+            : near && near.status === "due"
+              ? "tz-row-due"
+              : "";
+        const nearCell = near
+          ? `<div>${esc(fmtDate(near.due))}</div>
+             <span class="tz-status ${near.status}">${STATUS_LABEL[near.status]}</span>
+             ${
+               near.status === "due" || near.status === "missed"
+                 ? `<div><button class="tz-btn tz-confirm-btn tz-confirm" style="padding:4px 10px;font-size:12px">Potwierdź</button></div>`
+                 : ""
+             }`
+          : `<span class="tz-hint">—</span>`;
+        const daysLeft = contractDaysLeft(o);
+        const badge =
+          daysLeft != null && daysLeft >= 0 && daysLeft <= CONTRACT_SOON_DAYS
+            ? (() => {
+                const [y, m] = o.contractEnd.split("-").map(Number);
+                const endDate = mkDue(y, m - 1, 31);
+                return `<span class="tz-badge">Umowa kończy się ${esc(fmtDate(endDate).slice(0, 5))}</span>`;
+              })()
+            : "";
+        const expanded = expandedIds.has(o.id);
+        return `<tr data-id="${escAttr(o.id)}" class="${rowCls} tz-expand-hint" title="Kliknij, aby ${expanded ? "zwinąć" : "rozwinąć"} historię">
+          <td>${esc(o.name)}${badge}<div class="tz-cat">${esc(CATEGORY_LABEL[o.category] || o.category)}</div></td>
           <td>${chip}</td>
           <td>${esc(cycleWords(o.cycle))}</td>
+          <td class="tz-due-cell">${nearCell}</td>
           <td class="tz-amt">${formatAmount(o.amount)}</td>
           <td>${o.contractEnd ? esc(o.contractEnd) : "<span class='tz-hint'>—</span>"}</td>
           <td><div class="tz-actions">
             <button class="tz-iconbtn tz-edit">Edytuj</button>
             <button class="tz-iconbtn danger tz-del">Usuń</button>
           </div></td>
-        </tr>`;
+        </tr>${
+          expanded
+            ? `<tr class="tz-hist" data-hist="${escAttr(o.id)}"><td colspan="7">${historyHtml(o, confMap)}</td></tr>`
+            : ""
+        }`;
       })
       .join("");
 
@@ -543,7 +956,7 @@ export default async function activate(cl) {
               : `<table class="tz-tbl">
                    <thead><tr>
                      <th>Nazwa / kategoria</th><th>Właściciel</th><th>Cykl</th>
-                     <th>Kwota</th><th>Koniec umowy</th><th></th>
+                     <th>Najbliższy termin</th><th>Kwota</th><th>Koniec umowy</th><th></th>
                    </tr></thead>
                    <tbody>${rows}</tbody>
                  </table>`
@@ -558,20 +971,53 @@ export default async function activate(cl) {
 
     el.querySelectorAll("tr[data-id]").forEach((tr) => {
       const id = tr.getAttribute("data-id");
-      tr.querySelector(".tz-edit").addEventListener("click", () => {
-        const rec = obligations().find((o) => o.id === id);
-        if (rec) openForm(rec, () => renderObligations(el));
+      const rec = () => obligations().find((o) => o.id === id);
+      tr.querySelector(".tz-edit").addEventListener("click", (e) => {
+        e.stopPropagation();
+        const o = rec();
+        if (o) openForm(o, () => renderObligations(el));
       });
-      tr.querySelector(".tz-del").addEventListener("click", () => {
-        const rec = obligations().find((o) => o.id === id);
-        confirmDialog(
-          `Usunąć zobowiązanie „${rec ? rec.name : ""}"?`,
-          async () => {
-            await removeObligation(id);
-            renderObligations(el);
-          },
-        );
+      tr.querySelector(".tz-del").addEventListener("click", (e) => {
+        e.stopPropagation();
+        const o = rec();
+        confirmDialog(`Usunąć zobowiązanie „${o ? o.name : ""}"?`, async () => {
+          await removeObligation(id);
+          expandedIds.delete(id);
+          renderObligations(el);
+        });
       });
+      const confirmBtn = tr.querySelector(".tz-confirm");
+      if (confirmBtn)
+        confirmBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const o = rec();
+          const near = o && nearestOccurrence(o, confirmationMap());
+          if (near)
+            openConfirmPayment(o, near.due, () => renderObligations(el));
+        });
+      tr.addEventListener("click", () => {
+        if (expandedIds.has(id)) expandedIds.delete(id);
+        else expandedIds.add(id);
+        renderObligations(el);
+      });
+    });
+
+    el.querySelectorAll("tr[data-hist]").forEach((tr) => {
+      const id = tr.getAttribute("data-hist");
+      tr.querySelectorAll(".tz-undo").forEach((btn) =>
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const due = btn.getAttribute("data-due");
+          confirmDialog(
+            `Cofnąć potwierdzenie z ${fmtDate(due)}?`,
+            async () => {
+              await removeConfirmation(id, due);
+              renderObligations(el);
+            },
+            { danger: false, yesLabel: "Cofnij" },
+          );
+        }),
+      );
     });
   }
 
@@ -639,29 +1085,34 @@ export default async function activate(cl) {
           </div>
           <div class="tz-err" id="tz-owner-err" style="display:none"></div>`;
 
-        el.querySelector("#tz-owner-add").addEventListener("click", async () => {
-          const name = el.querySelector("#tz-new-name").value.trim();
-          const color = el.querySelector("#tz-new-color").value || "#89b4fa";
-          const errEl = el.querySelector("#tz-owner-err");
-          errEl.style.display = "none";
-          if (!name) {
-            errEl.textContent = "Podaj nazwę właściciela";
-            errEl.style.display = "";
-            return;
-          }
-          const id =
-            name.toLowerCase().replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") ||
-            "w" + hashStr(name + color);
-          const list2 = owners().slice();
-          if (list2.some((o) => o.id === id)) {
-            errEl.textContent = "Właściciel o tej nazwie już istnieje";
-            errEl.style.display = "";
-            return;
-          }
-          list2.push({ id, name, color });
-          await saveOwners(list2);
-          draw();
-        });
+        el.querySelector("#tz-owner-add").addEventListener(
+          "click",
+          async () => {
+            const name = el.querySelector("#tz-new-name").value.trim();
+            const color = el.querySelector("#tz-new-color").value || "#89b4fa";
+            const errEl = el.querySelector("#tz-owner-err");
+            errEl.style.display = "none";
+            if (!name) {
+              errEl.textContent = "Podaj nazwę właściciela";
+              errEl.style.display = "";
+              return;
+            }
+            const id =
+              name
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/gi, "-")
+                .replace(/^-|-$/g, "") || "w" + hashStr(name + color);
+            const list2 = owners().slice();
+            if (list2.some((o) => o.id === id)) {
+              errEl.textContent = "Właściciel o tej nazwie już istnieje";
+              errEl.style.display = "";
+              return;
+            }
+            list2.push({ id, name, color });
+            await saveOwners(list2);
+            draw();
+          },
+        );
 
         el.querySelectorAll(".tz-owner-row[data-id]").forEach((row) => {
           const id = row.getAttribute("data-id");
