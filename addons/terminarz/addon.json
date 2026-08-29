@@ -2,7 +2,7 @@
   "id": "terminarz",
   "name": "Terminarz",
   "icon": "📅",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Rejestr zobowiązań cyklicznych i terminowych (ubezpieczenia, leasing, podatki, domeny, abonamenty) z przypisanym właścicielem. Każde zobowiązanie generuje terminy ze statusami (nadchodząca / do potwierdzenia / potwierdzona / przegapiona) i historią płatności, widoczne też w kalendarzu Dzień / Miesiąc / Rok.",
   "author": "Cyber Life contributors",
   "category": "productivity",
@@ -22,6 +22,20 @@
       "title": "Nadchodzące płatności",
       "icon": "📅",
       "description": "Pięć najbliższych terminów; przegapione na górze",
+      "dashboard": true
+    },
+    {
+      "id": "terminarz.today",
+      "title": "Dzisiaj",
+      "icon": "📌",
+      "description": "Dzisiejsza data i pozycje na dziś ze statusem",
+      "dashboard": true
+    },
+    {
+      "id": "terminarz.month",
+      "title": "Miesiąc",
+      "icon": "🗓️",
+      "description": "Mini siatka bieżącego miesiąca z kropkami przy dniach z terminami",
       "dashboard": true
     }
   ],

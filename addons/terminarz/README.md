@@ -14,8 +14,10 @@ przepadło.
   i kategorii oraz sumami kwot.
 - **Przypomnienia** — powiadomienia systemowe 7 dni przed terminem, dzień przed
   i po przekroczeniu terminu; każde najwyżej raz.
-- **Widget „Nadchodzące płatności"** — pięć najbliższych pozycji, przegapione
-  czerwone na górze.
+- **Widgety** — „Nadchodzące płatności" (pięć najbliższych pozycji, przegapione
+  czerwone na górze), „Dzisiaj" (data i pozycje na dziś) oraz „Miesiąc" (mini
+  siatka bieżącego miesiąca z kropkami przy dniach z terminami). Każdy klikalny:
+  prowadzi do modułu, a z mini siatki wprost na wybrany dzień w kalendarzu.
 
 ## Statusy terminu
 
