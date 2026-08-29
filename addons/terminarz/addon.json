@@ -2,13 +2,20 @@
   "id": "terminarz",
   "name": "Terminarz",
   "icon": "📅",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Rejestr zobowiązań cyklicznych i terminowych (ubezpieczenia, leasing, podatki, domeny, abonamenty) z przypisanym właścicielem. Każde zobowiązanie generuje terminy ze statusami (nadchodząca / do potwierdzenia / potwierdzona / przegapiona) i historią płatności, widoczne też w kalendarzu Dzień / Miesiąc / Rok.",
   "author": "Cyber Life contributors",
   "category": "productivity",
-  "tags": ["finance", "payments", "calendar", "reminders"],
+  "tags": [
+    "finance",
+    "payments",
+    "calendar",
+    "reminders"
+  ],
   "entry": "main.js",
-  "permissions": ["notify"],
+  "permissions": [
+    "notify"
+  ],
   "widgets": [
     {
       "id": "terminarz.upcoming",
@@ -24,9 +31,125 @@
       "label": "Terminarz",
       "icon": "📅",
       "pages": [
-        { "id": "obligations", "label": "Zobowiązania", "icon": "📋" },
-        { "id": "calendar", "label": "Kalendarz", "icon": "📆" }
+        {
+          "id": "obligations",
+          "label": "Zobowiązania",
+          "icon": "📋"
+        },
+        {
+          "id": "calendar",
+          "label": "Kalendarz",
+          "icon": "📆"
+        }
       ]
+    }
+  ],
+  "agentTools": [
+    {
+      "name": "list",
+      "description": "List Terminarz obligations with their configuration and nearest due date. Filter by owner or category.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "owner": {
+            "type": "string",
+            "description": "Owner name or id (e.g. \"Spółka\")"
+          },
+          "category": {
+            "type": "string",
+            "description": "Category id: car, home, firm, leasing, tax, domain, subscription, other"
+          }
+        }
+      }
+    },
+    {
+      "name": "pending",
+      "description": "Occurrences awaiting confirmation or already missed, in a date window. Defaults to 60 days back through 7 days ahead. Returns dueDate, expectedAmount, tolerancePct, matchPattern and owner so a caller can match them against bank transactions.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "Lower bound YYYY-MM-DD (default: 60 days ago)"
+          },
+          "to": {
+            "type": "string",
+            "description": "Upper bound YYYY-MM-DD (default: 7 days ahead)"
+          }
+        }
+      }
+    },
+    {
+      "name": "confirm",
+      "description": "Confirm one occurrence as paid. Fails when the obligation or the occurrence does not exist, or when it is already confirmed.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "obligationId": {
+            "type": "string",
+            "description": "Obligation id from terminarz_list or terminarz_pending"
+          },
+          "dueDate": {
+            "type": "string",
+            "description": "Occurrence due date YYYY-MM-DD"
+          },
+          "paidDate": {
+            "type": "string",
+            "description": "Real payment date YYYY-MM-DD"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Real amount paid; defaults to the expected amount"
+          },
+          "note": {
+            "type": "string",
+            "description": "Optional note stored with the confirmation"
+          }
+        },
+        "required": [
+          "obligationId",
+          "dueDate",
+          "paidDate"
+        ]
+      }
+    },
+    {
+      "name": "suggest",
+      "description": "Record recurring payments detected elsewhere (e.g. in bank statements). The Obligations page shows them as a review bar the user can accept or dismiss.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "Detected recurring payments",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "cycle": {
+                  "type": "string",
+                  "description": "Free text, e.g. \"monthly\", \"co miesiąc\", \"yearly\""
+                },
+                "lastSeen": {
+                  "type": "string",
+                  "description": "Date of the most recent occurrence YYYY-MM-DD"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      }
     }
   ]
 }

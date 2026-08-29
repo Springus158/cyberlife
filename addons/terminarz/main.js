@@ -185,11 +185,16 @@ export default async function activate(cl) {
   // Month granularity so an occurrence earlier in the creation month counts
   // (freshly added obligation with a day already past ⇒ visible as missed).
   function windowStart(o) {
-    const today = todayStr();
-    const cap = addMonths(today, -HISTORY_MONTHS);
-    const created = o.createdAt || today;
-    const monthStart = created.slice(0, 7) + "-01";
-    return monthStart > cap ? monthStart : cap;
+    const cap = addMonths(todayStr(), -HISTORY_MONTHS);
+    const start = obligationStart(o);
+    return start > cap ? start : cap;
+  }
+
+  // Uncapped lower bound: the month the obligation was created in. The history
+  // view clamps this to HISTORY_MONTHS, but "does this occurrence exist?" must
+  // not — an occurrence from two years ago is still a real occurrence.
+  function obligationStart(o) {
+    return (o.createdAt || todayStr()).slice(0, 7) + "-01";
   }
 
   const occKey = (oblId, due) => `${oblId}|${due}`;
@@ -316,10 +321,12 @@ export default async function activate(cl) {
   function confirmationMap() {
     return Object.fromEntries(confirmations().map((c) => [c.k, c]));
   }
-  async function addConfirmation(oblId, due, date, amount) {
+  async function addConfirmation(oblId, due, date, amount, note = "") {
     const k = occKey(oblId, due);
     const list = confirmations().filter((c) => c.k !== k);
-    list.push({ k, date, amount, at: todayStr() });
+    const rec = { k, date, amount, at: todayStr() };
+    if (note) rec.note = note;
+    list.push(rec);
     await saveChunked(K_CONF, list);
   }
   async function removeConfirmation(oblId, due) {
@@ -407,6 +414,7 @@ export default async function activate(cl) {
   // Three moments per occurrence: 7 days out, 1 day out, and once it turns
   // "missed". Each fires at most once — the sent marks live in their own
   // storage key so a reinstall of the addon does not replay months of alerts.
+  const K_SUGG = "sugg"; // sugestie z agenta: [{id, name, amount, cycle, lastSeen, at}]
   const K_SENT = "sent"; // { "oblId|due|stage": "YYYY-MM-DD" }
   const REMIND_AHEAD = 7; // pierwsze ostrzeżenie: tyle dni przed terminem
   const MISSED_LOOKBACK = 30; // jak stare przegapione jeszcze zgłaszamy
@@ -558,6 +566,43 @@ export default async function activate(cl) {
       .forEach((body) => renderUpcomingWidget(body));
   }
 
+  // ------------------------------------------------------------- suggestions (task 5/6)
+  // Recurring payments an agent spotted elsewhere (bank statements). They are
+  // proposals only — nothing lands in the register until the user accepts one.
+  // Chunked like obl/conf: an agent parsing statements can append repeatedly,
+  // and a single key is capped at 64KB by the host.
+  function suggestions() {
+    return partKeys(K_SUGG).flatMap((k) => cache[k] || []);
+  }
+  async function saveSuggestions(list) {
+    await saveChunked(K_SUGG, list);
+  }
+  // Same charge parsed from two statement lines differs in case, spacing and
+  // rounding — treat those as one finding instead of two rows.
+  const suggKey = (name, amount) =>
+    `${String(name).trim().toLowerCase().replace(/\s+/g, " ")}|${Number(amount || 0).toFixed(2)}`;
+
+  // Free-text cycle from the agent ("monthly", "co miesiąc", "rocznie") plus
+  // the last seen date is enough to prefill the form; the user corrects the rest.
+  function cycleFromSuggestion(s) {
+    const raw = String(s.cycle || "").toLowerCase();
+    const seen = /^\d{4}-\d{2}-\d{2}$/.test(s.lastSeen || "")
+      ? parseDate(s.lastSeen)
+      : parseDate(todayStr());
+    const day = seen.getDate();
+    if (/\b(kwartal|kwartaln|quarter|quarterly)/.test(raw))
+      return { type: "quarterly", day };
+    if (/\b(rocz|roczn|year|yearly|annual)/.test(raw))
+      return { type: "yearly", month: seen.getMonth(), day };
+    // jeden miesiąc rat to wszystko, co da się wywnioskować z lastSeen —
+    // resztę użytkownik zaznacza w formularzu
+    if (/\b(raty|ratach|install|installments)/.test(raw))
+      return { type: "installments", months: [seen.getMonth()], day };
+    if (/\b(jednoraz|once|onetime|one-time)/.test(raw))
+      return { type: "onetime", date: dateStr(seen) };
+    return { type: "monthly", day };
+  }
+
   // ------------------------------------------------------------- style
   function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -661,6 +706,12 @@ export default async function activate(cl) {
       .tz-w-date{font-variant-numeric:tabular-nums;color:var(--text-muted,#9399b2);white-space:nowrap;}
       .tz-w-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       .tz-widget-row .tz-chip{font-size:10px;padding:1px 6px;}
+      /* suggestions bar (5/6) */
+      .tz-sugg{border-bottom:1px solid var(--border,#45475a);background:var(--bg-secondary,#181825);padding:8px 14px;}
+      .tz-sugg-head{font-size:13px;font-weight:600;margin-bottom:6px;color:var(--text-primary,#cdd6f4);}
+      .tz-sugg-row{display:flex;align-items:center;gap:10px;padding:4px 0;font-size:13px;}
+      .tz-sugg-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .tz-sugg-actions{margin-left:auto;display:flex;gap:6px;}
     `;
     document.head.appendChild(s);
   }
@@ -668,7 +719,9 @@ export default async function activate(cl) {
   // ------------------------------------------------------------- form modal
   function openForm(existing, afterSave) {
     injectStyle();
-    const editing = !!existing;
+    // A prefill (from an agent suggestion) comes in without an id — that is a
+    // new obligation with fields filled in, not an edit.
+    const editing = !!(existing && existing.id);
     // working copy
     const f = existing
       ? JSON.parse(JSON.stringify(existing))
@@ -1083,6 +1136,28 @@ export default async function activate(cl) {
       </table>`;
   }
 
+  function suggestionsBarHtml() {
+    const sugg = suggestions();
+    if (!sugg.length) return "";
+    const rows = sugg
+      .map(
+        (s) => `<div class="tz-sugg-row" data-sugg="${escAttr(s.id)}">
+          <span class="tz-sugg-name">${esc(s.name)}</span>
+          <span class="tz-amt">${formatAmount(s.amount)}</span>
+          <span class="tz-hint">${esc(s.cycle || "—")}${s.lastSeen ? ` · ostatnio ${esc(fmtDate(s.lastSeen))}` : ""}</span>
+          <span class="tz-sugg-actions">
+            <button class="tz-btn tz-sugg-add" style="padding:3px 10px;font-size:12px">Dodaj</button>
+            <button class="tz-iconbtn tz-sugg-drop">Odrzuć</button>
+          </span>
+        </div>`,
+      )
+      .join("");
+    return `<div class="tz-sugg">
+      <div class="tz-sugg-head">🔎 Wykryto ${sugg.length} ${sugg.length === 1 ? "cykliczną płatność" : "cyklicznych płatności"} — przejrzyj</div>
+      ${rows}
+    </div>`;
+  }
+
   function renderObligations(el) {
     oblEl = el;
     injectStyle();
@@ -1148,6 +1223,7 @@ export default async function activate(cl) {
           <h2>📋 Zobowiązania</h2>
           <button class="tz-btn" id="tz-add">+ Dodaj</button>
         </div>
+        ${suggestionsBarHtml()}
         <div class="tz-body">
           ${
             list.length === 0
@@ -1169,6 +1245,38 @@ export default async function activate(cl) {
 
     const add = () => openForm(null, () => renderObligations(el));
     el.querySelector("#tz-add").addEventListener("click", add);
+
+    el.querySelectorAll(".tz-sugg-row[data-sugg]").forEach((row) => {
+      const id = row.getAttribute("data-sugg");
+      const drop = async () => {
+        await saveSuggestions(suggestions().filter((s) => s.id !== id));
+        renderObligations(el);
+      };
+      row.querySelector(".tz-sugg-add").addEventListener("click", () => {
+        const s = suggestions().find((x) => x.id === id);
+        if (!s) return;
+        // accepted suggestion prefills the form; it leaves the bar only once
+        // the obligation is actually saved
+        openForm(
+          {
+            id: "",
+            name: s.name,
+            category: "other",
+            ownerId: owners()[0] ? owners()[0].id : "",
+            amount: s.amount || "",
+            tolerancePct: 10,
+            cycle: cycleFromSuggestion(s),
+            statementPattern: s.name,
+            contractEnd: "",
+            note: "",
+          },
+          async () => {
+            await drop();
+          },
+        );
+      });
+      row.querySelector(".tz-sugg-drop").addEventListener("click", drop);
+    });
     const addEmpty = el.querySelector("#tz-add-empty");
     if (addEmpty) addEmpty.addEventListener("click", add);
 
@@ -1665,6 +1773,208 @@ export default async function activate(cl) {
     icon: "📅",
     dashboard: true,
     render: renderUpcomingWidget,
+  });
+
+  // ----------------------------------------------------------- agent tools (5/6)
+  // Exposed over MCP as terminarz_list / _pending / _confirm / _suggest.
+  const PENDING_BACK_DAYS = 60;
+  const PENDING_AHEAD_DAYS = 7;
+  const PENDING_MAX_AHEAD_MONTHS = 24; // sanity cap na okno z argumentów modelu
+  const CONFIRM_AHEAD_DAYS = 7; // ile dni „do przodu" wolno jeszcze potwierdzić
+  const MAX_SUGGESTIONS = 100;
+  const MAX_SUGG_FIELD = 200;
+  const MAX_NOTE_LEN = 2000;
+
+  function resolveOwnerId(needle) {
+    if (!needle) return null;
+    const n = String(needle).toLowerCase();
+    const ow = owners().find(
+      (o) => o.id.toLowerCase() === n || o.name.toLowerCase() === n,
+    );
+    return ow ? ow.id : null;
+  }
+
+  function ownerName(id) {
+    const ow = ownerById(id);
+    return ow ? ow.name : null;
+  }
+
+  function publicObligation(o, confMap) {
+    const near = nearestOccurrence(o, confMap);
+    return {
+      id: o.id,
+      name: o.name,
+      category: o.category,
+      categoryLabel: CATEGORY_LABEL[o.category] || o.category,
+      owner: ownerName(o.ownerId),
+      ownerId: o.ownerId,
+      expectedAmount: o.amount,
+      tolerancePct: o.tolerancePct ?? 0,
+      cycle: o.cycle,
+      cycleLabel: cycleWords(o.cycle),
+      matchPattern: o.statementPattern || "",
+      contractEnd: o.contractEnd || null,
+      note: o.note || "",
+      nextDueDate: near ? near.due : null,
+      nextStatus: near ? near.status : null,
+    };
+  }
+
+  cl.registerAgentTool("list", async (args = {}) => {
+    const confMap = confirmationMap();
+    const ownerId = args.owner ? resolveOwnerId(args.owner) : null;
+    if (args.owner && !ownerId)
+      throw new Error(`nieznany właściciel: ${args.owner}`);
+    const category = args.category ? String(args.category) : null;
+    if (category && !CATEGORY_LABEL[category])
+      throw new Error(
+        `nieznana kategoria: ${category} (dozwolone: ${CATEGORIES.map((c) => c.id).join(", ")})`,
+      );
+    const list = obligations().filter(
+      (o) =>
+        (!ownerId || o.ownerId === ownerId) &&
+        (!category || o.category === category),
+    );
+    return {
+      count: list.length,
+      obligations: list
+        .sort((a, b) => a.name.localeCompare(b.name, "pl"))
+        .map((o) => publicObligation(o, confMap)),
+    };
+  });
+
+  cl.registerAgentTool("pending", async (args = {}) => {
+    const today = todayStr();
+    const from = args.from || addDays(today, -PENDING_BACK_DAYS);
+    const to = args.to || addDays(today, PENDING_AHEAD_DAYS);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to))
+      throw new Error("from/to muszą być w formacie YYYY-MM-DD");
+    if (from > to)
+      throw new Error(`from (${from}) jest późniejsze niż to (${to})`);
+    // bez tego "to": "9999-12-31" każe przeliczać wystąpienia przez tysiące lat
+    const maxTo = addMonths(today, PENDING_MAX_AHEAD_MONTHS);
+    if (to > maxTo)
+      throw new Error(
+        `to (${to}) wykracza poza dozwolony horyzont — maksimum ${maxTo}`,
+      );
+    const confMap = confirmationMap();
+    const out = [];
+    for (const o of obligations()) {
+      // never reach before the obligation existed
+      const start = windowStart(o);
+      const lower = from > start ? from : start;
+      for (const due of occurrencesBetween(o.cycle, lower, to)) {
+        const status = occStatus(o.id, due, confMap);
+        if (status !== "due" && status !== "missed") continue;
+        out.push({
+          obligationId: o.id,
+          name: o.name,
+          dueDate: due,
+          expectedAmount: o.amount,
+          tolerancePct: o.tolerancePct ?? 0,
+          status,
+          matchPattern: o.statementPattern || "",
+          owner: ownerName(o.ownerId),
+          category: o.category,
+        });
+      }
+    }
+    out.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    return { count: out.length, from, to, pending: out };
+  });
+
+  cl.registerAgentTool("confirm", async (args = {}) => {
+    const { obligationId, dueDate, paidDate } = args;
+    const o = obligations().find((x) => x.id === obligationId);
+    if (!o)
+      throw new Error(`zobowiązanie nie znalezione: ${obligationId ?? "(brak id)"}`);
+    for (const [label, v] of [
+      ["dueDate", dueDate],
+      ["paidDate", paidDate],
+    ]) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v || "")))
+        throw new Error(`${label} musi być w formacie YYYY-MM-DD`);
+    }
+    // dueDate must be an occurrence this obligation actually generates —
+    // checked against its whole lifetime, not the 12-month history window,
+    // so rozliczanie zaległości sprzed roku nie dostaje „nie istnieje"
+    const valid = occurrencesBetween(
+      o.cycle,
+      obligationStart(o),
+      addMonths(todayStr(), 13),
+    );
+    if (!valid.includes(dueDate))
+      throw new Error(
+        `wystąpienie ${dueDate} nie istnieje dla tego zobowiązania (cykl: ${cycleWords(o.cycle)})`,
+      );
+    if (confirmationMap()[occKey(o.id, dueDate)])
+      throw new Error("wystąpienie już potwierdzone");
+    // Early payment is legitimate (the automation matches ±5 dni), a term
+    // months away is not — that would silently settle a future period.
+    const ahead = daysBetween(todayStr(), dueDate);
+    if (ahead > CONFIRM_AHEAD_DAYS)
+      throw new Error(
+        `wystąpienie ${dueDate} jeszcze nie nadeszło (termin za ${ahead} dni)`,
+      );
+    const amount = Number(args.amount);
+    await addConfirmation(
+      o.id,
+      dueDate,
+      paidDate,
+      amount > 0 ? amount : o.amount,
+      args.note ? String(args.note).slice(0, MAX_NOTE_LEN) : "",
+    );
+    if (oblEl) renderObligations(oblEl);
+    return {
+      ok: true,
+      obligationId: o.id,
+      dueDate,
+      paidDate,
+      amount: amount > 0 ? amount : o.amount,
+    };
+  });
+
+  cl.registerAgentTool("suggest", async (args = {}) => {
+    const items = Array.isArray(args.items) ? args.items : [];
+    if (!items.length)
+      throw new Error("items: podaj co najmniej jedną pozycję");
+    const list = suggestions().slice();
+    const clip = (v) =>
+      String(v || "")
+        .trim()
+        .slice(0, MAX_SUGG_FIELD);
+    let added = 0;
+    let skipped = 0;
+    for (const it of items) {
+      const name = clip(it?.name);
+      if (!name) continue;
+      if (list.length >= MAX_SUGGESTIONS) {
+        skipped++;
+        continue;
+      }
+      const amount = Number(it.amount) || 0;
+      if (list.some((s) => suggKey(s.name, s.amount) === suggKey(name, amount)))
+        continue;
+      let id = "s" + Math.abs(hashStr(name + amount + list.length));
+      while (list.some((s) => s.id === id)) id += "x";
+      list.push({
+        id,
+        name,
+        amount,
+        cycle: clip(it.cycle),
+        lastSeen: clip(it.lastSeen),
+        at: todayStr(),
+      });
+      added++;
+    }
+    if (added) await saveSuggestions(list);
+    if (oblEl) renderObligations(oblEl);
+    const out = { added, pending: list.length };
+    if (skipped) {
+      out.skipped = skipped;
+      out.note = `lista sugestii jest pełna (limit ${MAX_SUGGESTIONS}) — przejrzyj istniejące`;
+    }
+    return out;
   });
 
   // Reminders: once at startup, then hourly. The timer is cleared on dispose
