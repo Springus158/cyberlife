@@ -328,6 +328,7 @@ export default async function activate(cl) {
     if (note) rec.note = note;
     list.push(rec);
     await saveChunked(K_CONF, list);
+    await syncOccurrenceTitle(oblId, due);
   }
   async function removeConfirmation(oblId, due) {
     const k = occKey(oblId, due);
@@ -335,6 +336,7 @@ export default async function activate(cl) {
       K_CONF,
       confirmations().filter((c) => c.k !== k),
     );
+    await syncOccurrenceTitle(oblId, due);
   }
   async function dropConfirmationsFor(oblId) {
     await saveChunked(
@@ -387,8 +389,16 @@ export default async function activate(cl) {
     await saveObligations(list);
     if (prev && JSON.stringify(prev.cycle) !== JSON.stringify(rec.cycle))
       await reconcileConfirmations(rec);
+    // Google idzie w tle — zapis lokalny jest już zrobiony, a synchronizacja
+    // 12 wystąpień to kilkanaście żądań sieciowych. Czekanie na nią trzymało
+    // otwarty formularz i kusiło do ponownego kliknięcia „Zapisz", co
+    // uruchamiało drugi przebieg i tworzyło duplikaty.
+    syncObligation(rec)
+      .then(() => oblEl && renderObligations(oblEl))
+      .catch((err) => cl.log("sync w tle:", err));
   }
   async function removeObligation(id) {
+    await dropGoogleEvents(id);
     await saveObligations(obligations().filter((o) => o.id !== id));
     await dropConfirmationsFor(id);
   }
@@ -416,6 +426,8 @@ export default async function activate(cl) {
   // storage key so a reinstall of the addon does not replay months of alerts.
   const K_SUGG = "sugg"; // sugestie z agenta: [{id, name, amount, cycle, lastSeen, at}]
   const K_SENT = "sent"; // { "oblId|due|stage": "YYYY-MM-DD" }
+  const K_GCAL = "gcal"; // mapowanie wystąpień na eventy Google: [{k, event, calendar}]
+  const K_GERR = "gerr"; // { oblId: "komunikat" } — pozycje, których nie udało się zsynchronizować
   const REMIND_AHEAD = 7; // pierwsze ostrzeżenie: tyle dni przed terminem
   const MISSED_LOOKBACK = 30; // jak stare przegapione jeszcze zgłaszamy
   const MAX_PER_RUN = 5; // żeby zaległości nie wysypały serii powiadomień
@@ -696,6 +708,260 @@ export default async function activate(cl) {
     return { type: "monthly", day };
   }
 
+  // ------------------------------------------------------------- Google Calendar (2/3)
+  // Każde wystąpienie z horyzontu 12 miesięcy ma odpowiadający mu event
+  // całodniowy w wybranym kalendarzu. Mapowanie trzymamy u siebie, bo Google
+  // nie wie nic o zobowiązaniach — zna tylko pojedyncze wydarzenia.
+  const GCAL_HORIZON_MONTHS = 12;
+  const GCAL_LOCAL = ""; // wartość pola „Kalendarz" dla pozycji tylko lokalnych
+  const GCAL_NOTE = "Cyber Life · Terminarz";
+  // Znacznik w opisie wydarzenia wiąże je z konkretnym zobowiązaniem. Dzięki
+  // niemu stan uzgadniamy z Google, a nie z lokalną notatką, która może się
+  // rozjechać (dwie instancje addonu, przerwany zapis, ręczne kasowanie).
+  const gcalTag = (oblId) => `#terminarz:${oblId}`;
+  const gcalNoteFor = (oblId) => `${GCAL_NOTE}\n${gcalTag(oblId)}`;
+  let sharedCalendars = []; // [{id, label}] — puste, gdy Google niepodłączone
+
+  function gcalMap() {
+    return partKeys(K_GCAL).flatMap((k) => cache[k] || []);
+  }
+  async function saveGcalMap(list) {
+    await saveChunked(K_GCAL, list);
+  }
+  function gcalErrors() {
+    return cache[K_GERR] && typeof cache[K_GERR] === "object" ? cache[K_GERR] : {};
+  }
+  // Surowy błąd potrafi mieć pełny URL Google i pół strony tekstu — w dymku
+  // przy pozycji liczy się przyczyna, nie ślad techniczny.
+  function friendlyGcalError(message) {
+    const msg = String(message || "");
+    if (/connection lost|no such host|dial tcp|Failed to fetch|NetworkError|ECONNREFUSED|timeout/i.test(msg))
+      return "Brak połączenia z Google — spróbuję ponownie przy następnym uruchomieniu";
+    if (/401|invalid_grant|unauthorized/i.test(msg))
+      return "Google odrzuciło autoryzację — podłącz konto ponownie w Ustawieniach";
+    if (/403|insufficient|forbidden/i.test(msg))
+      return "Brak uprawnień do tego kalendarza";
+    if (/404|not found/i.test(msg))
+      return "Kalendarz jest niedostępny — sprawdź udostępnienie w Ustawieniach";
+    return msg.length > 160 ? msg.slice(0, 157) + "…" : msg;
+  }
+
+  async function setGcalError(oblId, message) {
+    const errs = { ...gcalErrors() };
+    if (message) errs[oblId] = friendlyGcalError(message);
+    else delete errs[oblId];
+    await put(K_GERR, errs);
+  }
+
+  // Lista udostępnionych kalendarzy; pusta także wtedy, gdy addon nie ma
+  // uprawnienia albo Google nie jest podłączone — pole w formularzu wtedy nie
+  // istnieje i wszystko działa jak przed 2/3.
+  async function loadSharedCalendars() {
+    try {
+      const accounts = await cl.api("/api/calendar/accounts");
+      sharedCalendars = (accounts || []).flatMap((acc) =>
+        (acc.calendars || []).map((c) => ({
+          id: c.id,
+          label: `${acc.email} / ${c.name}`,
+          readOnly: !!c.readOnly,
+        })),
+      );
+    } catch (err) {
+      sharedCalendars = [];
+      cl.log("kalendarze Google niedostępne:", err && err.message ? err.message : err);
+    }
+    return sharedCalendars;
+  }
+
+  function calendarLabel(id) {
+    const found = sharedCalendars.find((c) => c.id === id);
+    return found ? found.label : id;
+  }
+
+  // Tytuł eventu; „✓ " dokleja się po potwierdzeniu wystąpienia
+  function eventTitle(o, confirmed) {
+    const ow = ownerById(o.ownerId);
+    const who = ow ? ` (${ow.name})` : "";
+    return `${confirmed ? "✓ " : ""}${o.name} — ${formatAmount(o.amount)}${who}`;
+  }
+
+  // Okno synchronizacji: horyzont w przód plus okres karencji wstecz. Bez
+  // tego wystąpienie „do potwierdzenia" sprzed dwóch dni nie miałoby
+  // odpowiednika w Google, a to właśnie te pozycje się potwierdza.
+  function gcalWindow() {
+    const today = todayStr();
+    return [addDays(today, -GRACE_DAYS), addMonths(today, GCAL_HORIZON_MONTHS)];
+  }
+
+  function horizonOccurrences(o) {
+    const [from, to] = gcalWindow();
+    return occurrencesBetween(o.cycle, from, to);
+  }
+
+  // Doprowadza Google do stanu zgodnego z zobowiązaniem: tworzy brakujące
+  // eventy, poprawia tytuły, kasuje nadmiarowe i przenosi je po zmianie
+  // kalendarza. Błąd nie przerywa zapisu lokalnego — zostaje ślad w K_GERR.
+  // Wydarzenia tego zobowiązania faktycznie obecne w kalendarzu, po dacie.
+  // Duplikaty na ten sam dzień trafiają do listy „extra" do skasowania.
+  async function existingEvents(calendarId, oblId, from, to) {
+    const events = await cl.api(
+      `/api/calendar/events?calendar=${encodeURIComponent(calendarId)}&from=${from}&to=${to}`,
+    );
+    const tag = gcalTag(oblId);
+    const byDate = new Map();
+    const extra = [];
+    for (const ev of events || []) {
+      if (!ev || !(ev.note || "").includes(tag)) continue;
+      if (byDate.has(ev.start)) extra.push(ev);
+      else byDate.set(ev.start, ev);
+    }
+    return { byDate, extra };
+  }
+
+  async function syncObligation(o) {
+    if (!o) return;
+    const target = o.calendarId || GCAL_LOCAL;
+    const confMap = confirmationMap();
+    const wanted = target ? horizonOccurrences(o) : [];
+    const wantedSet = new Set(wanted);
+    // Uzgadniamy z każdym kalendarzem, w którym mamy ślad tego zobowiązania,
+    // żeby po zmianie kalendarza posprzątać także ten poprzedni.
+    const touched = new Set(
+      gcalMap()
+        .filter((m) => m.k.startsWith(`${o.id}|`))
+        .map((m) => m.calendar),
+    );
+    if (target) touched.add(target);
+    if (!touched.size) {
+      await setGcalError(o.id, "");
+      return;
+    }
+
+    const [from, to] = gcalWindow();
+    const fresh = [];
+    try {
+      for (const calId of touched) {
+        const { byDate, extra } = await existingEvents(calId, o.id, from, to);
+        // 1. skasuj duplikaty i wszystko, czego tu być nie powinno
+        const doomed = [...extra];
+        for (const [date, ev] of byDate) {
+          if (calId !== target || !wantedSet.has(date)) doomed.push(ev);
+        }
+        for (const ev of doomed) {
+          await cl.api("/api/calendar/events", {
+            op: "delete",
+            calendar: calId,
+            event: ev.id,
+          });
+          byDate.delete(ev.start);
+        }
+        if (calId !== target) continue;
+
+        // 2. popraw tytuły istniejących i utwórz brakujące
+        for (const due of wanted) {
+          const key = occKey(o.id, due);
+          const title = eventTitle(o, !!confMap[key]);
+          const ev = byDate.get(due);
+          if (ev) {
+            if (ev.title !== title) {
+              await cl.api("/api/calendar/events", {
+                op: "update",
+                calendar: target,
+                event: ev.id,
+                title,
+              });
+            }
+            fresh.push({ k: key, event: ev.id, calendar: target });
+          } else {
+            const created = await cl.api("/api/calendar/events", {
+              calendar: target,
+              title,
+              date: due,
+              note: gcalNoteFor(o.id),
+            });
+            if (created && created.id)
+              fresh.push({ k: key, event: created.id, calendar: target });
+          }
+        }
+      }
+      // mapowanie odtwarzane ze stanu Google, nie doklejane do starego
+      await replaceObligationMapping(o.id, fresh);
+      await setGcalError(o.id, "");
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      await replaceObligationMapping(o.id, fresh);
+      await setGcalError(o.id, msg);
+      cl.log(`sync z Google nieudany dla „${o.name}":`, msg);
+    }
+  }
+
+  // Podmienia wpisy jednego zobowiązania, czytając mapę tuż przed zapisem,
+  // żeby równoległy zapis innej pozycji nie został nadpisany.
+  async function replaceObligationMapping(oblId, entries) {
+    const rest = gcalMap().filter((m) => !m.k.startsWith(`${oblId}|`));
+    await saveGcalMap([...rest, ...entries]);
+  }
+
+  // Usuwa wszystkie eventy zobowiązania (przy kasowaniu pozycji)
+  async function dropGoogleEvents(oblId) {
+    const calendars = new Set(
+      gcalMap()
+        .filter((m) => m.k.startsWith(`${oblId}|`))
+        .map((m) => m.calendar),
+    );
+    if (!calendars.size) {
+      await setGcalError(oblId, "");
+      return;
+    }
+    const [from, to] = gcalWindow();
+    try {
+      for (const calId of calendars) {
+        const { byDate, extra } = await existingEvents(calId, oblId, from, to);
+        for (const ev of [...byDate.values(), ...extra]) {
+          await cl.api("/api/calendar/events", {
+            op: "delete",
+            calendar: calId,
+            event: ev.id,
+          });
+        }
+      }
+      await replaceObligationMapping(oblId, []);
+      await setGcalError(oblId, "");
+    } catch (err) {
+      cl.log("usuwanie eventów Google nieudane:", err && err.message ? err.message : err);
+    }
+  }
+
+  // Potwierdzenie i jego cofnięcie zmieniają tylko tytuł jednego eventu
+  async function syncOccurrenceTitle(oblId, due) {
+    const o = obligations().find((x) => x.id === oblId);
+    if (!o || !o.calendarId) return;
+    const entry = gcalMap().find((m) => m.k === occKey(oblId, due));
+    if (!entry) return;
+    try {
+      await cl.api("/api/calendar/events", {
+        op: "update",
+        calendar: entry.calendar,
+        event: entry.event,
+        title: eventTitle(o, !!confirmationMap()[occKey(oblId, due)]),
+      });
+      await setGcalError(oblId, "");
+    } catch (err) {
+      await setGcalError(oblId, err && err.message ? err.message : String(err));
+    }
+  }
+
+  // Ponowna próba dla pozycji, które nie zsynchronizowały się wcześniej —
+  // wołana przy starcie addonu, żeby chwilowy brak sieci sam się naprawił.
+  async function retryFailedSyncs() {
+    const failed = Object.keys(gcalErrors());
+    if (!failed.length || !sharedCalendars.length) return;
+    for (const id of failed) {
+      const o = obligations().find((x) => x.id === id);
+      if (o) await syncObligation(o);
+    }
+  }
+
   // ------------------------------------------------------------- style
   function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -805,6 +1071,8 @@ export default async function activate(cl) {
       .tz-sugg-row{display:flex;align-items:center;gap:10px;padding:4px 0;font-size:13px;}
       .tz-sugg-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       .tz-sugg-actions{margin-left:auto;display:flex;gap:6px;}
+      .tz-gmark{font-size:12px;opacity:.75;cursor:help;}
+      .tz-gmark.warn{color:var(--error,#f38ba8);opacity:1;}
       /* widgets Dzisiaj / Miesiąc (6/6) */
       .tz-ycell .dot.due{background:#f9e2af;}
       .tz-today{display:flex;flex-direction:column;gap:4px;}
@@ -832,6 +1100,7 @@ export default async function activate(cl) {
           name: "",
           category: "other",
           ownerId: owners()[0] ? owners()[0].id : "",
+          calendarId: GCAL_LOCAL,
           amount: "",
           tolerancePct: 10,
           cycle: { type: "monthly", day: 1 },
@@ -907,6 +1176,23 @@ export default async function activate(cl) {
               .join("")}</select>
           </label>
         </div>
+        ${
+          sharedCalendars.length
+            ? `<label class="tz-field"><span>Kalendarz</span>
+                <select class="tz-select" id="f-calendar">
+                  <option value="">Lokalny (Cyber Life)</option>
+                  ${sharedCalendars
+                    .filter((c) => !c.readOnly || c.id === f.calendarId)
+                    .map(
+                      (c) =>
+                        `<option value="${escAttr(c.id)}" ${c.id === f.calendarId ? "selected" : ""}>${esc(c.label)}</option>`,
+                    )
+                    .join("")}
+                </select>
+                <div class="tz-hint">Wystąpienia z najbliższych 12 miesięcy trafią do wybranego kalendarza Google.</div>
+              </label>`
+            : ""
+        }
         <div class="tz-row2">
           <label class="tz-field"><span>Kwota (zł) *</span>
             <input class="tz-input" id="f-amount" type="number" step="0.01" min="0" value="${escAttr(f.amount)}" placeholder="0.00">
@@ -951,6 +1237,7 @@ export default async function activate(cl) {
       bind("#f-name", (e) => (f.name = e.target.value));
       bind("#f-cat", (e) => (f.category = e.target.value));
       bind("#f-owner", (e) => (f.ownerId = e.target.value));
+      bind("#f-calendar", (e) => (f.calendarId = e.target.value));
       bind("#f-amount", (e) => (f.amount = e.target.value));
       bind("#f-tol", (e) => (f.tolerancePct = e.target.value));
       bind("#f-pattern", (e) => (f.statementPattern = e.target.value));
@@ -1032,7 +1319,9 @@ export default async function activate(cl) {
         .forEach((e) => (e.style.display = "none"));
     }
 
+    let saving = false;
     async function onSave() {
+      if (saving) return; // klik w trakcie zapisu nie może zapisać drugi raz
       captureCycle();
       clearErrs();
       let ok = true;
@@ -1081,6 +1370,7 @@ export default async function activate(cl) {
         name: f.name.trim(),
         category: f.category,
         ownerId: f.ownerId,
+        calendarId: f.calendarId || GCAL_LOCAL,
         amount: amt,
         tolerancePct: Number(f.tolerancePct) || 0,
         cycle: f.cycle,
@@ -1088,13 +1378,32 @@ export default async function activate(cl) {
         contractEnd: (f.contractEnd || "").trim(),
         note: (f.note || "").trim(),
       };
-      await upsertObligation(rec);
+      saving = true;
+      const saveBtn = modal.querySelector("#f-save");
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Zapisywanie…";
+      }
+      try {
+        await upsertObligation(rec);
+      } finally {
+        saving = false;
+      }
       close();
       if (afterSave) afterSave();
     }
 
     render();
     document.body.appendChild(bg);
+
+    // Kalendarz mógł zostać udostępniony w Ustawieniach już po starcie
+    // addonu — odświeżamy listę i przerysowujemy pole, jeśli się zmieniła.
+    const before = sharedCalendars.map((c) => c.id).join("|");
+    loadSharedCalendars()
+      .then((list) => {
+        if (list.map((c) => c.id).join("|") !== before && bg.isConnected) render();
+      })
+      .catch(() => {});
   }
 
   // ------------------------------------------------------------- confirm
@@ -1238,6 +1547,16 @@ export default async function activate(cl) {
       </table>`;
   }
 
+  // Znacznik synchronizacji przy nazwie: kalendarz dla pozycji trzymanych
+  // w Google, ostrzeżenie gdy ostatnia próba się nie powiodła.
+  function gcalMark(o) {
+    const err = gcalErrors()[o.id];
+    if (err)
+      return ` <span class="tz-gmark warn" title="${escAttr(`Nie zsynchronizowano z Google: ${err}`)}">⚠</span>`;
+    if (!o.calendarId) return "";
+    return ` <span class="tz-gmark" title="${escAttr(calendarLabel(o.calendarId))}">📆</span>`;
+  }
+
   function suggestionsBarHtml() {
     const sugg = suggestions();
     if (!sugg.length) return "";
@@ -1301,7 +1620,7 @@ export default async function activate(cl) {
             : "";
         const expanded = expandedIds.has(o.id);
         return `<tr data-id="${escAttr(o.id)}" class="${rowCls} tz-expand-hint" title="Kliknij, aby ${expanded ? "zwinąć" : "rozwinąć"} historię">
-          <td>${esc(o.name)}${badge}<div class="tz-cat">${esc(CATEGORY_LABEL[o.category] || o.category)}</div></td>
+          <td>${esc(o.name)}${badge}${gcalMark(o)}<div class="tz-cat">${esc(CATEGORY_LABEL[o.category] || o.category)}</div></td>
           <td>${chip}</td>
           <td>${esc(cycleWords(o.cycle))}</td>
           <td class="tz-due-cell">${nearCell}</td>
@@ -2127,6 +2446,13 @@ export default async function activate(cl) {
     }
     return out;
   });
+
+  // Google: lista udostępnionych kalendarzy decyduje, czy pole „Kalendarz"
+  // w ogóle istnieje; zaległe synchronizacje dochodzą przy starcie.
+  loadSharedCalendars()
+    .then(() => retryFailedSyncs())
+    .then(() => oblEl && renderObligations(oblEl))
+    .catch((err) => cl.log("Google Calendar:", err));
 
   // Reminders: once at startup, then hourly. The timer is cleared on dispose
   // so a hot reload does not leave a second one running.
