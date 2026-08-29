@@ -124,6 +124,14 @@ export default async function activate(cl) {
   const QUARTER_MONTHS = [0, 3, 6, 9]; // styczeń, kwiecień, lipiec, październik
 
   const pad2 = (n) => String(n).padStart(2, "0");
+  // „dziś 15:04" dla świeżych danych, pełna data dla starszych
+  function fmtSyncTime(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return "—";
+    const stamp = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const day = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    return day === todayStr() ? `dziś ${stamp}` : `${fmtDate(day)} ${stamp}`;
+  }
   const dateStr = (d) =>
     `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   const todayStr = () => dateStr(new Date());
@@ -199,9 +207,9 @@ export default async function activate(cl) {
 
   const occKey = (oblId, due) => `${oblId}|${due}`;
 
-  function occStatus(oblId, due, confMap) {
+  function occStatus(oblId, due, confMap, effective) {
     if (confMap[occKey(oblId, due)]) return "confirmed";
-    const late = daysBetween(due, todayStr());
+    const late = daysBetween(effective || due, todayStr());
     if (late < 0) return "upcoming";
     if (late <= GRACE_DAYS) return "due";
     return "missed";
@@ -225,10 +233,16 @@ export default async function activate(cl) {
       .slice()
       .reverse()
       .find((due) => occStatus(o.id, due, confMap) !== "confirmed");
-    if (unresolved)
-      return { due: unresolved, status: occStatus(o.id, unresolved, confMap) };
-    if (next) return { due: next, status: "upcoming" };
-    return null;
+    const pick = unresolved || next;
+    if (!pick) return null;
+    return {
+      due: effectiveDue(o.id, pick),
+      sourceDue: pick,
+      status: unresolved
+        ? occStatus(o.id, pick, confMap, effectiveDue(o.id, pick))
+        : "upcoming",
+      gone: isGone(o.id, pick),
+    };
   }
 
   // "YYYY-MM" contract end → days until the last day of that month (null when unset).
@@ -428,6 +442,10 @@ export default async function activate(cl) {
   const K_SENT = "sent"; // { "oblId|due|stage": "YYYY-MM-DD" }
   const K_GCAL = "gcal"; // mapowanie wystąpień na eventy Google: [{k, event, calendar}]
   const K_GERR = "gerr"; // { oblId: "komunikat" } — pozycje, których nie udało się zsynchronizować
+  const K_SHIFT = "shift"; // { "oblId|termin": "nowa data" } — przesunięcia zrobione w Google
+  const K_GONE = "gone"; // { "oblId|termin": "YYYY-MM-DD" } — event skasowany w Google
+  const K_EXT = "gext"; // obce wydarzenia z udostępnionych kalendarzy + czas pobrania
+  const K_PREFS = "prefs"; // { showGoogle: bool }
   const REMIND_AHEAD = 7; // pierwsze ostrzeżenie: tyle dni przed terminem
   const MISSED_LOOKBACK = 30; // jak stare przegapione jeszcze zgłaszamy
   const MAX_PER_RUN = 5; // żeby zaległości nie wysypały serii powiadomień
@@ -623,6 +641,11 @@ export default async function activate(cl) {
         items.length
           ? shown
               .map((it) => {
+                if (it.kind === "google")
+                  return `<div class="tz-widget-row tz-ext" title="${escAttr(it.account || "")}">
+                    <span class="tz-w-name">📅 ${esc(it.title)}</span>
+                    <span class="tz-hint">${esc(it.time || "cały dzień")}</span>
+                  </div>`;
                 const ow = ownerById(it.ownerId);
                 return `<div class="tz-widget-row ${it.status}">
                   <span class="tz-w-name" title="${escAttr(it.title)}">${esc(it.title)}</span>
@@ -962,6 +985,141 @@ export default async function activate(cl) {
     }
   }
 
+  // ------------------------------------------------------------- sync zwrotny (3/3)
+  // Google jest właścicielem dat: przesunięcie wydarzenia w telefonie ma
+  // przesunąć termin w Terminarzu, a nie odwrotnie. Cykl zostaje nietknięty —
+  // przesunięcie zapamiętujemy jako wyjątek dla konkretnego wystąpienia.
+  const POLL_INTERVAL_MS = 5 * 60 * 1000;
+  let pollTimer = null;
+
+  function shifts() {
+    return cache[K_SHIFT] && typeof cache[K_SHIFT] === "object" ? cache[K_SHIFT] : {};
+  }
+  function goneEvents() {
+    return cache[K_GONE] && typeof cache[K_GONE] === "object" ? cache[K_GONE] : {};
+  }
+  function prefs() {
+    const p = cache[K_PREFS];
+    return { showGoogle: p && "showGoogle" in p ? !!p.showGoogle : true };
+  }
+  async function setPref(key, value) {
+    await put(K_PREFS, { ...prefs(), [key]: value });
+  }
+
+  // Data, pod którą wystąpienie faktycznie żyje — po uwzględnieniu
+  // przesunięcia zrobionego w Google.
+  function effectiveDue(oblId, due) {
+    return shifts()[occKey(oblId, due)] || due;
+  }
+  function isGone(oblId, due) {
+    return !!goneEvents()[occKey(oblId, due)];
+  }
+
+  function externalCache() {
+    const c = cache[K_EXT];
+    return c && typeof c === "object" ? c : { at: "", items: [] };
+  }
+
+  // Obce wydarzenia: wszystko z udostępnionych kalendarzy poza tym, co samo
+  // pochodzi z Terminarza. Trzymamy je w storage, żeby widoki działały też
+  // bez sieci — wtedy pokazujemy ostatnio pobrane dane i czas pobrania.
+  async function fetchExternalEvents() {
+    if (!sharedCalendars.length) return externalCache();
+    const [from, to] = gcalWindow();
+    const items = [];
+    for (const calRef of sharedCalendars) {
+      try {
+        const events = await cl.api(
+          `/api/calendar/events?calendar=${encodeURIComponent(calRef.id)}&from=${from}&to=${to}`,
+        );
+        for (const ev of events || []) {
+          if ((ev.note || "").includes("#terminarz:")) continue;
+          items.push({
+            id: ev.id,
+            calendar: calRef.id,
+            account: calRef.label,
+            title: ev.title || "(bez tytułu)",
+            start: ev.start,
+            allDay: !!ev.allDay,
+          });
+        }
+      } catch (err) {
+        cl.log("pobieranie obcych wydarzeń nieudane:", err && err.message ? err.message : err);
+        return externalCache(); // zostaw ostatnie dobre dane
+      }
+    }
+    const fresh = { at: new Date().toISOString(), items };
+    await put(K_EXT, fresh);
+    return fresh;
+  }
+
+  // Porównuje mapowanie z tym, co jest w Google: wykrywa przesunięcia dat
+  // i skasowane wydarzenia.
+  async function pullFromGoogle() {
+    const map = gcalMap();
+    if (!map.length) return false;
+    const [from, to] = gcalWindow();
+    const byCalendar = new Map();
+    for (const m of map) {
+      if (!byCalendar.has(m.calendar)) byCalendar.set(m.calendar, []);
+      byCalendar.get(m.calendar).push(m);
+    }
+    const nextShifts = { ...shifts() };
+    const nextGone = { ...goneEvents() };
+    let changed = false;
+
+    for (const [calId, entries] of byCalendar) {
+      let events;
+      try {
+        events = await cl.api(
+          `/api/calendar/events?calendar=${encodeURIComponent(calId)}&from=${from}&to=${to}`,
+        );
+      } catch (err) {
+        cl.log("odczyt z Google nieudany:", err && err.message ? err.message : err);
+        continue; // brak sieci nie może kasować wiedzy o wystąpieniach
+      }
+      const byId = new Map((events || []).map((e) => [e.id, e]));
+      for (const entry of entries) {
+        const [oblId, due] = [entry.k.split("|")[0], entry.k.split("|")[1]];
+        const ev = byId.get(entry.event);
+        if (!ev) {
+          if (!nextGone[entry.k]) {
+            nextGone[entry.k] = todayStr();
+            changed = true;
+          }
+          continue;
+        }
+        if (nextGone[entry.k]) {
+          delete nextGone[entry.k];
+          changed = true;
+        }
+        // Google wygrywa dla dat
+        const start = (ev.start || "").slice(0, 10);
+        if (start && start !== effectiveDue(oblId, due)) {
+          if (start === due) delete nextShifts[entry.k];
+          else nextShifts[entry.k] = start;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      await put(K_SHIFT, nextShifts);
+      await put(K_GONE, nextGone);
+    }
+    return changed;
+  }
+
+  // Jeden przebieg: zmiany z Google plus odświeżenie obcych wydarzeń
+  async function pollGoogle() {
+    if (!sharedCalendars.length) return;
+    const changed = await pullFromGoogle();
+    await fetchExternalEvents();
+    if (oblEl) renderObligations(oblEl);
+    if (calEl) renderCalendar(calEl);
+    refreshWidgets();
+    return changed;
+  }
+
   // ------------------------------------------------------------- style
   function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -1072,6 +1230,12 @@ export default async function activate(cl) {
       .tz-sugg-name{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
       .tz-sugg-actions{margin-left:auto;display:flex;gap:6px;}
       .tz-gmark{font-size:12px;opacity:.75;cursor:help;}
+      /* obce wydarzenia z Google (3/3) — przygaszone i tylko do odczytu */
+      .tz-ext{opacity:.62;}
+      .tz-ext-icon{font-size:12px;}
+      .tz-pill.ext{background:var(--bg-secondary,#181825);color:var(--text-secondary,#bac2de);opacity:.75;font-style:italic;}
+      .tz-ext-toggle{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap;}
+      .tz-cal-foot{padding:6px 14px;border-top:1px solid var(--border,#45475a);color:var(--text-muted,#9399b2);font-size:11px;}
       .tz-gmark.warn{color:var(--error,#f38ba8);opacity:1;}
       /* widgets Dzisiaj / Miesiąc (6/6) */
       .tz-ycell .dot.due{background:#f9e2af;}
@@ -1529,10 +1693,19 @@ export default async function activate(cl) {
     }
     const rows = shown
       .map((due) => {
-        const st = occStatus(o.id, due, confMap);
+        const st = occStatus(o.id, due, confMap, effectiveDue(o.id, due));
         const c = confMap[occKey(o.id, due)];
+        const moved = effectiveDue(o.id, due) !== due;
         return `<tr>
-          <td>${esc(fmtDate(due))}</td>
+          <td>${esc(fmtDate(effectiveDue(o.id, due)))}${
+            moved
+              ? ` <span class="tz-gmark" title="${escAttr(`Przesunięte w Google z ${fmtDate(due)}`)}">↔</span>`
+              : ""
+          }${
+            isGone(o.id, due)
+              ? ` <span class="tz-gmark warn" title="Event usunięty w Google">⚠</span>`
+              : ""
+          }</td>
           <td><span class="tz-status ${st}">${STATUS_LABEL[st]}</span></td>
           <td>${c ? esc(fmtDate(c.date)) : "—"}</td>
           <td class="tz-amt">${c ? formatAmount(c.amount) : "—"}</td>
@@ -1554,7 +1727,23 @@ export default async function activate(cl) {
     if (err)
       return ` <span class="tz-gmark warn" title="${escAttr(`Nie zsynchronizowano z Google: ${err}`)}">⚠</span>`;
     if (!o.calendarId) return "";
-    return ` <span class="tz-gmark" title="${escAttr(calendarLabel(o.calendarId))}">📆</span>`;
+    // wystąpienia skasowane w Google widać przy nazwie, żeby nie trzeba było
+    // szukać ich po kalendarzu
+    const gone = Object.keys(goneEvents())
+      .filter((k) => k.startsWith(`${o.id}|`))
+      .map((k) => fmtDate(k.split("|")[1]));
+    const moved = Object.keys(shifts()).filter((k) =>
+      k.startsWith(`${o.id}|`),
+    ).length;
+    return (
+      ` <span class="tz-gmark" title="${escAttr(calendarLabel(o.calendarId))}">📆</span>` +
+      (moved
+        ? ` <span class="tz-gmark" title="${escAttr(`Terminy przesunięte w Google: ${moved}`)}">↔</span>`
+        : "") +
+      (gone.length
+        ? ` <span class="tz-gmark warn" title="${escAttr(`Event usunięty w Google: ${gone.join(", ")}`)}">⚠</span>`
+        : "")
+    );
   }
 
   function suggestionsBarHtml() {
@@ -1603,6 +1792,7 @@ export default async function activate(cl) {
         const nearCell = near
           ? `<div>${esc(fmtDate(near.due))}</div>
              <span class="tz-status ${near.status}">${STATUS_LABEL[near.status]}</span>
+             ${near.gone ? ` <span class="tz-gmark warn" title="Event usunięty w Google">⚠</span>` : ""}
              ${
                near.status === "due" || near.status === "missed"
                  ? `<div><button class="tz-btn tz-confirm-btn tz-confirm" style="padding:4px 10px;font-size:12px">Potwierdź</button></div>`
@@ -1796,12 +1986,22 @@ export default async function activate(cl) {
   ) {
     const out = [];
     for (const o of list) {
-      for (const due of occurrencesBetween(o.cycle, startStr, endStr)) {
+      // szeroki zakres, bo przesunięcie z Google może wypchnąć wystąpienie
+      // poza okno liczone z samego cyklu
+      for (const due of occurrencesBetween(
+        o.cycle,
+        addDays(startStr, -31),
+        addDays(endStr, 31),
+      )) {
+        const shown = effectiveDue(o.id, due);
+        if (shown < startStr || shown > endStr) continue;
         const conf = confMap[occKey(o.id, due)];
         out.push({
           kind: "obligation",
-          due,
-          status: occStatus(o.id, due, confMap),
+          due: shown,
+          sourceDue: due,
+          gone: isGone(o.id, due),
+          status: occStatus(o.id, due, confMap, shown),
           title: o.name,
           // potwierdzona pozycja liczy się kwotą rzeczywistą, nie oczekiwaną
           amount: conf ? conf.amount : o.amount,
@@ -1810,7 +2010,13 @@ export default async function activate(cl) {
         });
       }
     }
-    return out.sort((a, b) => a.due.localeCompare(b.due));
+    out.push(...externalItems(startStr, endStr));
+    return out.sort(
+      (a, b) =>
+        a.due.localeCompare(b.due) ||
+        // płatności przed obcymi wydarzeniami tego samego dnia
+        (a.kind === b.kind ? 0 : a.kind === "google" ? 1 : -1),
+    );
   }
 
   function monthRange(anchor) {
@@ -1894,9 +2100,10 @@ export default async function activate(cl) {
       cells += `<div class="tz-mcell" data-day="${escAttr(due)}" title="Pokaż dzień">
         <span class="tz-dnum ${due === today ? "today" : ""}">${day}</span>
         ${shown
-          .map(
-            (it) =>
-              `<span class="tz-pill ${it.status}">${esc(shortName(it.title))} · ${formatAmount(it.amount)}</span>`,
+          .map((it) =>
+            it.kind === "google"
+              ? `<span class="tz-pill ext" title="${escAttr(it.account || "")}">📅 ${esc(shortName(it.title))}</span>`
+              : `<span class="tz-pill ${it.status}" ${it.gone ? 'title="Event usunięty w Google"' : ""}>${it.gone ? "⚠ " : ""}${esc(shortName(it.title))} · ${formatAmount(it.amount)}</span>`,
           )
           .join("")}
         ${more > 0 ? `<span class="tz-more">+${more} więcej</span>` : ""}
@@ -1911,6 +2118,13 @@ export default async function activate(cl) {
       return `<div class="tz-body"><div class="tz-empty"><div style="font-size:32px">📆</div><div>Brak płatności tego dnia.</div></div></div>`;
     const rows = items
       .map((it) => {
+        if (it.kind === "google") {
+          return `<div class="tz-day-row tz-ext" title="${escAttr(it.account || "")}">
+            <span class="tz-ext-icon">📅</span>
+            <div style="flex:1;min-width:0">${esc(it.title)}<div class="tz-cat">${esc(it.account || "")}</div></div>
+            ${it.time ? `<span class="tz-hint">${esc(it.time)}</span>` : `<span class="tz-hint">cały dzień</span>`}
+          </div>`;
+        }
         const ow = ownerById(it.ownerId);
         const chip = ow
           ? `<span class="tz-chip" style="background:${escAttr(ow.color)}">${esc(ow.name)}</span>`
@@ -1921,6 +2135,7 @@ export default async function activate(cl) {
           ${chip}
           <span class="tz-amt">${formatAmount(it.amount)}</span>
           <span class="tz-status ${it.status}">${STATUS_LABEL[it.status]}</span>
+          ${it.gone ? `<span class="tz-gmark warn" title="Event usunięty w Google">⚠</span>` : ""}
           ${confirmable ? `<button class="tz-btn tz-day-confirm" data-key="${escAttr(occKey(it.o.id, it.due))}" style="padding:4px 10px;font-size:12px">Potwierdź</button>` : ""}
         </div>`;
       })
@@ -1930,6 +2145,39 @@ export default async function activate(cl) {
 
   // Items of a range grouped by due date — the shape both the year view and
   // the month widget need.
+  // Obce wydarzenia jako drugi rodzaj pozycji — tylko do odczytu, bez kwoty
+  // i bez potwierdzania. Widoki traktują je jak każdą inną pozycję dnia, bo od
+  // 3/6 renderują ogólne itemy.
+  // Google zwraca godziny w strefie kalendarza (często UTC), więc dzień
+  // i godzinę liczymy lokalnie — inaczej wieczorne wydarzenie wylądowałoby
+  // w złym dniu, a godzina byłaby przesunięta o offset strefy.
+  function extDayAndTime(e) {
+    if (e.allDay) return { day: (e.start || "").slice(0, 10), time: "" };
+    const d = new Date(e.start);
+    if (isNaN(d.getTime()))
+      return { day: (e.start || "").slice(0, 10), time: "" };
+    return {
+      day: dateStr(d),
+      time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+    };
+  }
+
+  function externalItems(startStr, endStr) {
+    if (!prefs().showGoogle) return [];
+    return externalCache()
+      .items.map((e) => ({ e, ...extDayAndTime(e) }))
+      .filter(({ day }) => day >= startStr && day <= endStr)
+      .map(({ e, day, time }) => ({
+        kind: "google",
+        due: day,
+        time,
+        status: "external",
+        title: e.title,
+        account: e.account,
+        amount: null,
+      }));
+  }
+
   function itemsByDay(startStr, endStr, confMap, list) {
     const byDay = new Map();
     for (const it of itemsForRange(
@@ -2019,12 +2267,29 @@ export default async function activate(cl) {
         </div>
         <div class="tz-cal-filters">
           ${ownerChipsHtml()}
+          ${
+            sharedCalendars.length
+              ? `<label class="settings-checkbox tz-ext-toggle" title="Pokazuj w widokach zwykłe wydarzenia z podłączonych kalendarzy">
+                  <input type="checkbox" id="cal-ext" ${prefs().showGoogle ? "checked" : ""}>
+                  <span>Pokaż eventy Google</span>
+                </label>`
+              : ""
+          }
           <select class="tz-select" id="cal-cat" style="width:auto">
             <option value="">Wszystkie kategorie</option>
             ${CATEGORIES.map((c) => `<option value="${c.id}" ${c.id === cal.category ? "selected" : ""}>${esc(c.label)}</option>`).join("")}
           </select>
         </div>
         ${body}
+        ${
+          sharedCalendars.length
+            ? `<div class="tz-cal-foot">${
+                externalCache().at
+                  ? `Ostatnia synchronizacja z Google: ${esc(fmtSyncTime(externalCache().at))}`
+                  : "Brak danych z Google — czekam na pierwszą synchronizację"
+              }</div>`
+            : ""
+        }
       </div>`;
 
     const rerender = () => renderCalendar(el);
@@ -2054,6 +2319,13 @@ export default async function activate(cl) {
         rerender();
       }),
     );
+    const extToggle = el.querySelector("#cal-ext");
+    if (extToggle)
+      extToggle.addEventListener("change", async (e) => {
+        await setPref("showGoogle", e.target.checked);
+        rerender();
+        refreshWidgets();
+      });
     el.querySelector("#cal-cat").addEventListener("change", (e) => {
       cal.category = e.target.value;
       rerender();
@@ -2451,8 +2723,15 @@ export default async function activate(cl) {
   // w ogóle istnieje; zaległe synchronizacje dochodzą przy starcie.
   loadSharedCalendars()
     .then(() => retryFailedSyncs())
+    .then(() => pollGoogle())
     .then(() => oblEl && renderObligations(oblEl))
     .catch((err) => cl.log("Google Calendar:", err));
+
+  // Zmiany zrobione w Google (przesunięcia, kasowanie) i obce wydarzenia
+  // dociągamy cyklicznie; timer ginie razem z instancją addonu.
+  pollTimer = setInterval(() => {
+    pollGoogle().catch((err) => cl.log("polling Google:", err));
+  }, POLL_INTERVAL_MS);
 
   // Reminders: once at startup, then hourly. The timer is cleared on dispose
   // so a hot reload does not leave a second one running.
@@ -2466,6 +2745,8 @@ export default async function activate(cl) {
   return () => {
     if (remindTimer) clearInterval(remindTimer);
     remindTimer = null;
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
     oblEl = null;
     calEl = null;
   };
