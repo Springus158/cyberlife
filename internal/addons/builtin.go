@@ -34,11 +34,27 @@ func IsBuiltin(id string) bool {
 	return false
 }
 
-// Enabled reports whether an addon is on: built-ins default to on,
-// installed addons default to off until explicitly enabled
+// Shipped lists addons that live in the repo's addons/ folder and are
+// installed into ~/.cyberlife/addons by build.sh. They are ordinary addons —
+// files on disk, editable, hot-reloadable — but they come with the app, so
+// they default to on instead of waiting to be switched on by hand.
+var Shipped = []string{"terminarz"}
+
+func IsShipped(id string) bool {
+	for _, s := range Shipped {
+		if s == id {
+			return true
+		}
+	}
+	return false
+}
+
+// Enabled reports whether an addon is on: built-ins and addons shipped with
+// the app default to on, anything installed by the user defaults to off until
+// explicitly enabled
 func Enabled(id string, enabled map[string]bool) bool {
 	if v, ok := enabled[id]; ok {
 		return v
 	}
-	return IsBuiltin(id)
+	return IsBuiltin(id) || IsShipped(id)
 }

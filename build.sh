@@ -17,6 +17,24 @@ if [ -z "$WAILS" ]; then
   exit 1
 fi
 
+# Official addons live in addons/ but the app loads them from
+# ~/.cyberlife/addons, so a plain "git pull" would leave them stale — or
+# missing entirely on a fresh clone. Install them on every build, exactly like
+# the documented dev loop does by hand. A folder here is a copy of the repo,
+# not a place to keep local edits.
+install_addons() {
+  local target="${CYBERLIFE_HOME:-$HOME/.cyberlife}/addons"
+  mkdir -p "$target"
+  for id in "${SHIPPED_ADDONS[@]}"; do
+    [ -d "addons/$id" ] || continue
+    rm -rf "${target:?}/$id"
+    cp -r "addons/$id" "$target/"
+    echo "  addon: $id → $target/$id"
+  done
+}
+
+SHIPPED_ADDONS=(terminarz)
+
 case "$(uname -s)" in
   Darwin)
     APP="build/bin/CyberLife.app"
@@ -40,6 +58,7 @@ case "$(uname -s)" in
     codesign --force --deep --sign - \
       --entitlements build/darwin/entitlements.plist "$APP"
 
+    install_addons
     echo "✓ Build complete: $PROJECT_DIR/$APP"
     echo "  Run: open $APP"
     ;;
@@ -58,6 +77,7 @@ case "$(uname -s)" in
     fi
 
     "$WAILS" build -devtools "${TAGS[@]}" "$@"
+    install_addons
     echo "✓ Build complete: $PROJECT_DIR/build/bin/CyberLife"
     echo "  Run: ./build/bin/CyberLife"
     ;;
