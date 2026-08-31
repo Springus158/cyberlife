@@ -6,6 +6,7 @@ package calendar
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	calendarapi "google.golang.org/api/calendar/v3"
@@ -18,6 +19,9 @@ type Calendar struct {
 	Name     string `json:"name"`
 	Primary  bool   `json:"primary,omitempty"`
 	ReadOnly bool   `json:"readOnly,omitempty"`
+	// Color is the calendar's background colour as hex — the default for every
+	// event that does not override it.
+	Color string `json:"color,omitempty"`
 }
 
 // Event is the trimmed view the API exposes; all-day events carry dates,
@@ -30,6 +34,9 @@ type Event struct {
 	AllDay bool   `json:"allDay"`
 	Note   string `json:"note,omitempty"`
 	Link   string `json:"link,omitempty"`
+	// Color is set only when the event overrides its calendar's colour; empty
+	// means "use the calendar colour".
+	Color string `json:"color,omitempty"`
 }
 
 // EventInput is what callers send when creating or updating an event. An
@@ -86,6 +93,7 @@ func ListCalendars(svc *calendarapi.Service) ([]Calendar, error) {
 				// reader/freeBusyReader cannot be written to; the settings
 				// screen greys those out instead of failing on first write
 				ReadOnly: item.AccessRole == "reader" || item.AccessRole == "freeBusyReader",
+				Color:    item.BackgroundColor,
 			})
 		}
 		if res.NextPageToken == "" {
@@ -117,6 +125,7 @@ func ListEvents(svc *calendarapi.Service, calendarID, from, to string) ([]Event,
 		TimeMax(end.AddDate(0, 0, 1).Format(time.RFC3339)).
 		MaxResults(2500)
 	out := []Event{}
+	var palette map[string]string
 	// paginate: a busy calendar in a wide window exceeds one page, and a
 	// silently truncated list would look like "nothing more is scheduled"
 	for {
@@ -125,13 +134,54 @@ func ListEvents(svc *calendarapi.Service, calendarID, from, to string) ([]Event,
 			return nil, notFound("calendar", err)
 		}
 		for _, item := range res.Items {
-			out = append(out, toEvent(item))
+			ev := toEvent(item)
+			// Google sends a palette index, not a colour; resolve it only when an
+			// event actually overrides the calendar default, so calendars without
+			// custom colours cost no extra call.
+			if item.ColorId != "" {
+				if palette == nil {
+					palette = eventPalette(svc)
+				}
+				ev.Color = palette[item.ColorId]
+			}
+			out = append(out, ev)
 		}
 		if res.NextPageToken == "" {
 			return out, nil
 		}
 		call = call.PageToken(res.NextPageToken)
 	}
+}
+
+// The event palette is identical for every account and changes about never,
+// so one fetch per day covers the whole app. A failed fetch is not worth
+// surfacing — colours are decoration, and the previous palette (or none at
+// all) still renders a usable calendar.
+var colorPalette struct {
+	sync.Mutex
+	fetchedAt time.Time
+	byID      map[string]string
+}
+
+const paletteTTL = 24 * time.Hour
+
+func eventPalette(svc *calendarapi.Service) map[string]string {
+	colorPalette.Lock()
+	defer colorPalette.Unlock()
+	if colorPalette.byID != nil && time.Since(colorPalette.fetchedAt) < paletteTTL {
+		return colorPalette.byID
+	}
+	res, err := svc.Colors.Get().Do()
+	if err != nil {
+		return colorPalette.byID // may be nil — callers treat that as "no colour"
+	}
+	byID := make(map[string]string, len(res.Event))
+	for id, def := range res.Event {
+		byID[id] = def.Background
+	}
+	colorPalette.byID = byID
+	colorPalette.fetchedAt = time.Now()
+	return byID
 }
 
 func CreateEvent(svc *calendarapi.Service, calendarID string, in EventInput) (*Event, error) {
