@@ -1023,17 +1023,26 @@ export default async function activate(cl) {
   // Obce wydarzenia: wszystko z udostępnionych kalendarzy poza tym, co samo
   // pochodzi z Terminarza. Trzymamy je w storage, żeby widoki działały też
   // bez sieci — wtedy pokazujemy ostatnio pobrane dane i czas pobrania.
+  // Zwraca też rozbicie per kalendarz — okno „Synchronizuj" pokazuje, ile
+  // czego zaciągnięto, żeby było widać, że coś się faktycznie wydarzyło.
   async function fetchExternalEvents() {
-    if (!sharedCalendars.length) return externalCache();
+    if (!sharedCalendars.length) return { ...externalCache(), stats: [] };
     const [from, to] = gcalWindow();
     const items = [];
+    const stats = [];
     for (const calRef of sharedCalendars) {
       try {
         const events = await cl.api(
           `/api/calendar/events?calendar=${encodeURIComponent(calRef.id)}&from=${from}&to=${to}`,
         );
+        let ours = 0;
+        let external = 0;
         for (const ev of events || []) {
-          if ((ev.note || "").includes("#terminarz:")) continue;
+          if ((ev.note || "").includes("#terminarz:")) {
+            ours++;
+            continue;
+          }
+          external++;
           items.push({
             id: ev.id,
             calendar: calRef.id,
@@ -1043,14 +1052,17 @@ export default async function activate(cl) {
             allDay: !!ev.allDay,
           });
         }
+        stats.push({ label: calRef.label, ours, external, error: "" });
       } catch (err) {
-        cl.log("pobieranie obcych wydarzeń nieudane:", err && err.message ? err.message : err);
-        return externalCache(); // zostaw ostatnie dobre dane
+        const msg = err && err.message ? err.message : String(err);
+        cl.log("pobieranie obcych wydarzeń nieudane:", msg);
+        stats.push({ label: calRef.label, ours: 0, external: 0, error: friendlyGcalError(msg) });
+        return { ...externalCache(), stats, failed: true }; // zostaw ostatnie dobre dane
       }
     }
     const fresh = { at: new Date().toISOString(), items };
     await put(K_EXT, fresh);
-    return fresh;
+    return { ...fresh, stats };
   }
 
   // Porównuje mapowanie z tym, co jest w Google: wykrywa przesunięcia dat
@@ -1157,6 +1169,10 @@ export default async function activate(cl) {
       .tz-months{display:grid;grid-template-columns:repeat(3,1fr);gap:4px 10px;margin-top:4px;}
       .tz-months label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;}
       .tz-err{color:var(--error,#f38ba8);font-size:12px;margin-top:2px;}
+      .tz-note{color:var(--success,#a6e3a1);font-size:12px;margin-top:2px;}
+      .tz-sync-status{color:var(--text-secondary,#bac2de);font-size:13px;margin-bottom:10px;}
+      .tz-sync-err{color:var(--error,#f38ba8);}
+      .tz-sync-tbl td{font-size:13px;}
       .tz-modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;}
       .tz-hint{color:var(--text-muted,#9399b2);font-size:12px;}
       .tz-owner-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border,#45475a);}
@@ -1183,7 +1199,9 @@ export default async function activate(cl) {
       .tz-cal-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
       .tz-cal-title{font-size:var(--fs-lg,16px);font-weight:700;min-width:12em;}
       .tz-cal-nav{display:flex;gap:4px;}
-      .tz-cal-views{display:flex;gap:2px;margin-left:auto;background:var(--bg-tertiary,#313244);border:1px solid var(--border,#45475a);border-radius:8px;padding:2px;}
+      .tz-cal-actions{display:flex;gap:6px;margin-left:auto;}
+      .tz-cal-actions .tz-btn{padding:5px 12px;font-size:13px;font-weight:500;}
+      .tz-cal-views{display:flex;gap:2px;background:var(--bg-tertiary,#313244);border:1px solid var(--border,#45475a);border-radius:8px;padding:2px;}
       .tz-cal-views button{background:none;border:none;border-radius:6px;padding:5px 12px;color:var(--text-secondary,#bac2de);cursor:pointer;font:inherit;font-size:13px;}
       .tz-cal-views button.active{background:var(--accent,#89b4fa);color:var(--bg-primary,#1e1e2e);font-weight:600;}
       .tz-cal-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--border,#45475a);}
@@ -1609,6 +1627,219 @@ export default async function activate(cl) {
       onYes();
     });
     document.body.appendChild(bg);
+  }
+
+  // Wspólna skorupa okna modalnego: Esc, klik w tło, brak propagacji kliknięć.
+  function modalShell(innerHTML, width = "460px") {
+    injectStyle();
+    const bg = document.createElement("div");
+    bg.className = "tz-modal-bg";
+    bg.innerHTML = `<div class="tz-modal" style="max-width:${width}">${innerHTML}</div>`;
+    const modal = bg.querySelector(".tz-modal");
+    modal.addEventListener("click", (e) => e.stopPropagation());
+    const onEsc = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        close();
+      }
+    };
+    const close = () => {
+      bg.remove();
+      document.removeEventListener("keydown", onEsc);
+    };
+    bg.addEventListener("click", (e) => {
+      if (e.target === bg) close();
+    });
+    document.addEventListener("keydown", onEsc);
+    document.body.appendChild(bg);
+    return { bg, modal, close };
+  }
+
+  // ------------------------------------------------------------- ręczna synchronizacja
+  // To samo, co robi automatyczny poll, tylko na żądanie i ze statystykami
+  // per kalendarz — bez tego nie widać, czy klik cokolwiek zrobił.
+  async function runManualSync() {
+    const changed = await pullFromGoogle();
+    const res = await fetchExternalEvents();
+    if (oblEl) renderObligations(oblEl);
+    if (calEl) renderCalendar(calEl);
+    refreshWidgets();
+    return { changed, stats: res.stats || [], failed: !!res.failed, at: res.at || "" };
+  }
+
+  function syncRowsHtml(stats) {
+    return stats
+      .map(
+        (st) => `<tr>
+          <td>${esc(st.label)}</td>
+          ${
+            st.error
+              ? `<td colspan="2" class="tz-sync-err">${esc(st.error)}</td>`
+              : `<td class="tz-amt">${st.external}</td><td class="tz-amt">${st.ours}</td>`
+          }
+        </tr>`,
+      )
+      .join("");
+  }
+
+  function openSyncDialog() {
+    const { bg, close } = modalShell(
+      `<h3>Synchronizacja z Google</h3>
+       <div class="tz-sync-status" id="s-status">Pobieram zmiany…</div>
+       <table class="tz-tbl tz-sync-tbl">
+         <thead><tr><th>Kalendarz</th><th>Wydarzenia</th><th>Z Terminarza</th></tr></thead>
+         <tbody id="s-rows">${sharedCalendars
+           .map((c) => `<tr><td>${esc(c.label)}</td><td colspan="2" class="tz-cat">…</td></tr>`)
+           .join("")}</tbody>
+       </table>
+       <div class="tz-cal-foot" id="s-foot" style="border:none;padding:8px 0 0"></div>
+       <div class="tz-modal-actions">
+         <button class="tz-btn ghost" id="s-again" disabled>Synchronizuj ponownie</button>
+         <button class="tz-btn" id="s-close">Zamknij</button>
+       </div>`,
+      "520px",
+    );
+    const statusEl = bg.querySelector("#s-status");
+    const rowsEl = bg.querySelector("#s-rows");
+    const footEl = bg.querySelector("#s-foot");
+    const againBtn = bg.querySelector("#s-again");
+    bg.querySelector("#s-close").addEventListener("click", close);
+
+    const run = async () => {
+      againBtn.disabled = true;
+      statusEl.textContent = "Pobieram zmiany…";
+      let res;
+      try {
+        res = await runManualSync();
+      } catch (err) {
+        statusEl.textContent = friendlyGcalError(err && err.message ? err.message : String(err));
+        statusEl.className = "tz-sync-status tz-sync-err";
+        againBtn.disabled = false;
+        return;
+      }
+      // Modal żyje poza kontenerem strony, ale renderCalendar mógł go już
+      // przerysować — sprawdzamy, czy okno wciąż jest w DOM.
+      if (!bg.isConnected) return;
+      rowsEl.innerHTML = syncRowsHtml(res.stats);
+      statusEl.className = "tz-sync-status" + (res.failed ? " tz-sync-err" : "");
+      statusEl.textContent = res.failed
+        ? "Synchronizacja nieudana — pokazuję ostatnie pobrane dane."
+        : res.changed
+          ? "Gotowe. Zmiany z Google zostały wczytane."
+          : "Gotowe. Brak zmian po stronie Google.";
+      footEl.textContent = res.at ? `Pobrano: ${fmtSyncTime(res.at)}` : "";
+      againBtn.disabled = false;
+    };
+    run();
+    againBtn.addEventListener("click", run);
+  }
+
+  // ------------------------------------------------------------- zwykłe wydarzenie Google
+  // Google chce pełnego RFC3339 ze strefą — budujemy je z lokalnej daty
+  // i godziny, żeby wydarzenie wpadło o tej porze, którą widzi użytkownik.
+  function rfc3339Local(dateStr, timeStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const [hh, mm] = timeStr.split(":").map(Number);
+    const off = -new Date(y, m - 1, d, hh, mm).getTimezoneOffset();
+    const pad = (n) => String(Math.abs(Math.trunc(n))).padStart(2, "0");
+    return `${dateStr}T${pad(hh)}:${pad(mm)}:00${off >= 0 ? "+" : "-"}${pad(off / 60)}:${pad(off % 60)}`;
+  }
+
+  const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+  function openExternalEvent(defaultDate, afterSave) {
+    const { bg, close } = modalShell(
+      `<h3>Nowe wydarzenie</h3>
+       <label class="tz-field"><span>Kalendarz *</span>
+         <select class="tz-select" id="e-cal">
+           ${sharedCalendars.map((c) => `<option value="${escAttr(c.id)}">${esc(c.label)}</option>`).join("")}
+         </select>
+       </label>
+       <label class="tz-field"><span>Tytuł *</span>
+         <input class="tz-input" id="e-title" type="text" maxlength="200" placeholder="np. Spotkanie z księgową">
+       </label>
+       <label class="tz-field"><span>Data *</span>
+         <input class="tz-input" id="e-date" type="text" inputmode="numeric" placeholder="RRRR-MM-DD" value="${escAttr(defaultDate || todayStr())}">
+       </label>
+       <div class="tz-row2">
+         <label class="tz-field"><span>Godzina od</span>
+           <input class="tz-input" id="e-from" type="text" placeholder="HH:MM (puste = cały dzień)">
+         </label>
+         <label class="tz-field"><span>Godzina do</span>
+           <input class="tz-input" id="e-to" type="text" placeholder="HH:MM">
+         </label>
+       </div>
+       <label class="tz-field"><span>Notatka</span>
+         <textarea class="tz-input" id="e-note" rows="2" maxlength="500"></textarea>
+       </label>
+       <div class="tz-err" id="e-err" style="display:none"></div>
+       <div class="tz-modal-actions">
+         <button class="tz-btn ghost" id="e-cancel">Anuluj</button>
+         <button class="tz-btn" id="e-save">Zapisz w Google</button>
+       </div>`,
+    );
+    const errEl = bg.querySelector("#e-err");
+    const saveBtn = bg.querySelector("#e-save");
+    bg.querySelector("#e-cancel").addEventListener("click", close);
+    const fail = (msg) => {
+      errEl.textContent = msg;
+      errEl.style.display = "";
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Zapisz w Google";
+    };
+
+    saveBtn.addEventListener("click", async () => {
+      if (saveBtn.disabled) return;
+      errEl.style.display = "none";
+      const calId = bg.querySelector("#e-cal").value;
+      const title = bg.querySelector("#e-title").value.trim();
+      const date = bg.querySelector("#e-date").value.trim();
+      const from = bg.querySelector("#e-from").value.trim();
+      const to = bg.querySelector("#e-to").value.trim();
+      const note = bg.querySelector("#e-note").value.trim();
+      if (!title) return fail("Podaj tytuł wydarzenia");
+      if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(date))
+        return fail("Podaj datę w formacie RRRR-MM-DD");
+      if (from && !TIME_RE.test(from)) return fail("Godzina od: format HH:MM");
+      if (to && !TIME_RE.test(to)) return fail("Godzina do: format HH:MM");
+      if (to && !from) return fail("Podaj godzinę początku albo zostaw obie puste");
+      if (from && to && to <= from) return fail("Godzina do musi być późniejsza niż od");
+
+      const body = { op: "create", calendar: calId, title, note };
+      if (from) {
+        body.start = rfc3339Local(date, from);
+        if (to) body.end = rfc3339Local(date, to);
+      } else {
+        body.date = date;
+      }
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Zapisywanie…";
+      try {
+        await cl.api("/api/calendar/events", body);
+      } catch (err) {
+        return fail(friendlyGcalError(err && err.message ? err.message : String(err)));
+      }
+      // Bez tego świeżo dodane wydarzenie nie pojawiłoby się w widokach,
+      // gdy filtr obcych wydarzeń jest wyłączony — wygląda jak zgubiony zapis.
+      if (!prefs().showGoogle) await setPref("showGoogle", true);
+      await fetchExternalEvents();
+      if (afterSave) afterSave();
+      const [winFrom, winTo] = gcalWindow();
+      if (date >= winFrom && date <= winTo) {
+        close();
+        return;
+      }
+      // Poza oknem synchronizacji wydarzenie istnieje w Google, ale nie
+      // pojawi się w widokach — inaczej zapis wyglądałby na nieudany.
+      errEl.className = "tz-note";
+      errEl.textContent =
+        "Zapisano w Google. Data wykracza poza zakres synchronizacji, więc wydarzenie nie pojawi się w kalendarzu Terminarza.";
+      errEl.style.display = "";
+      const actions = bg.querySelector(".tz-modal-actions");
+      actions.innerHTML = `<button class="tz-btn" id="e-ok">Zamknij</button>`;
+      actions.querySelector("#e-ok").addEventListener("click", close);
+    });
+    bg.querySelector("#e-title").focus();
   }
 
   // ------------------------------------------------------------- payment confirmation
@@ -2259,6 +2490,14 @@ export default async function activate(cl) {
             <button class="tz-iconbtn" id="cal-next" title="Następny okres ]">›</button>
           </div>
           <span class="tz-cal-title">${esc(calTitle())}</span>
+          ${
+            sharedCalendars.length
+              ? `<div class="tz-cal-actions">
+                  <button class="tz-btn ghost" id="cal-add-event" title="Dodaj wydarzenie do kalendarza Google">+ Wydarzenie</button>
+                  <button class="tz-btn ghost" id="cal-sync" title="Pobierz zmiany z Google teraz">🔄 Synchronizuj</button>
+                </div>`
+              : ""
+          }
           <div class="tz-cal-views">
             <button data-view="day" class="${cal.view === "day" ? "active" : ""}" title="d">Dzień</button>
             <button data-view="month" class="${cal.view === "month" ? "active" : ""}" title="m">Miesiąc</button>
@@ -2305,6 +2544,14 @@ export default async function activate(cl) {
       setAnchor(todayStr());
       rerender();
     });
+    const syncBtn = el.querySelector("#cal-sync");
+    if (syncBtn) syncBtn.addEventListener("click", () => openSyncDialog());
+    const addEvBtn = el.querySelector("#cal-add-event");
+    if (addEvBtn)
+      addEvBtn.addEventListener("click", () =>
+        // W widoku dnia sensownym domyślnym terminem jest oglądany dzień
+        openExternalEvent(cal.view === "day" ? cal.anchor : todayStr(), rerender),
+      );
     el.querySelectorAll(".tz-cal-views button").forEach((b) =>
       b.addEventListener("click", () => {
         cal.view = b.getAttribute("data-view");

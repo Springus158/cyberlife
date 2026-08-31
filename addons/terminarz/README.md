@@ -106,13 +106,31 @@ te klikane ręcznie, więc zawsze widać realną datę i kwotę. Zgłoszone suge
 czekają w pasku nad listą — zaakceptowana otwiera formularz z wypełnionymi
 polami, odrzucona znika.
 
+## Kalendarz Google
+
+Gdy w **Ustawienia → Google Calendar** podłączone jest konto i udostępniony
+przynajmniej jeden kalendarz, na stronie Kalendarz pojawiają się dwa przyciski:
+
+- **🔄 Synchronizuj** — uruchamia ten sam przebieg, co automatyczny poll
+  (co 5 minut), tylko od razu. Okno pokazuje per kalendarz, ile zaciągnięto
+  zwykłych wydarzeń i ile pozycji pochodzi z Terminarza; błąd jednego
+  kalendarza nie kasuje wcześniej pobranych danych.
+- **+ Wydarzenie** — dodaje zwykłe wydarzenie do wybranego kalendarza Google
+  (cały dzień albo z godzinami). Nie jest to zobowiązanie: nie ma cyklu,
+  kwoty ani potwierdzania płatności. Po zapisie widok odświeża się sam,
+  a filtr „Pokaż eventy Google" włącza się, jeśli był wyłączony.
+
+Wydarzenia spoza Terminarza pozostają w widokach tylko do odczytu — edytuje
+się je w Google.
+
 ## Dane
 
 Wszystko leży lokalnie w magazynie addonu (`cl.storage`). Listy, które rosną —
 zobowiązania (`obl`), potwierdzenia (`conf`) i sugestie (`sugg`) — są dzielone
 na części pod limit 64 KB na klucz; `owners` i `sent` są z natury małe.
-Addon nie wychodzi do sieci — jedyne uprawnienie w manifeście to `notify`,
-potrzebne do powiadomień systemowych.
+Uprawnienia w manifeście: `notify` (powiadomienia systemowe) i `calendar`
+(dostęp do `/api/calendar` — wyłącznie do kalendarzy oznaczonych jako
+udostępnione dla addonów).
 
 ## Instalacja w trybie deweloperskim
 
