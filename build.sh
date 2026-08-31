@@ -33,7 +33,7 @@ install_addons() {
   done
 }
 
-SHIPPED_ADDONS=(terminarz)
+SHIPPED_ADDONS=(terminarz cyber-bot)
 
 case "$(uname -s)" in
   Darwin)

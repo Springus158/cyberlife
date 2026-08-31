@@ -38,7 +38,7 @@ func IsBuiltin(id string) bool {
 // installed into ~/.cyberlife/addons by build.sh. They are ordinary addons —
 // files on disk, editable, hot-reloadable — but they come with the app, so
 // they default to on instead of waiting to be switched on by hand.
-var Shipped = []string{"terminarz"}
+var Shipped = []string{"terminarz", "cyber-bot"}
 
 func IsShipped(id string) bool {
 	for _, s := range Shipped {
