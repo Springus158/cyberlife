@@ -151,7 +151,7 @@ func LoadAll(enabled map[string]bool) []Addon {
 		if IsBuiltin(a.ID) {
 			a.Error = fmt.Sprintf("id %q is taken by a built-in addon", a.ID)
 		}
-		a.Enabled = a.Error == "" && enabled[a.ID]
+		a.Enabled = a.Error == "" && Enabled(a.ID, enabled)
 		installed = append(installed, a)
 	}
 	sort.Slice(installed, func(i, j int) bool { return installed[i].ID < installed[j].ID })

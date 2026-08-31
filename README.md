@@ -105,6 +105,12 @@ export default async function activate(cl) {
 }
 ```
 
+**Official addons come with the app.** `build.sh` installs everything from `addons/` that
+ships with Cyber Life (currently Terminarz) into `~/.cyberlife/addons`, and those default
+to on — so `git pull && bash build.sh` is all it takes. They stay ordinary addons: plain
+files on disk, editable, hot-reloadable. Because each build refreshes them from the repo,
+keep local experiments in a folder of your own rather than in theirs.
+
 Addons get real integration for free: their pages join the tab bar, digits, palette and reorder modal; their widgets join the sidebar and dashboards; `addons_reload` hot-reloads while you develop. Manage everything in *Settings → Addons* (categories, tags, enable/disable — new addons stay off until you turn them on).
 
 Even built-in integrations (Gmail, Jira, voice dictation, health checks, Pomodoro, iTerm2) are addons you can switch off.
