@@ -135,14 +135,10 @@ func ListEvents(svc *calendarapi.Service, calendarID, from, to string) ([]Event,
 		}
 		for _, item := range res.Items {
 			ev := toEvent(item)
-			// Google sends a palette index, not a colour; resolve it only when an
-			// event actually overrides the calendar default, so calendars without
-			// custom colours cost no extra call.
+			// Google sends a palette index, not a colour; resolving it costs no
+			// extra call for the eleven standard ids.
 			if item.ColorId != "" {
-				if palette == nil {
-					palette = eventPalette(svc)
-				}
-				ev.Color = palette[item.ColorId]
+				ev.Color = eventColor(svc, item.ColorId, &palette)
 			}
 			out = append(out, ev)
 		}
@@ -164,6 +160,36 @@ var colorPalette struct {
 }
 
 const paletteTTL = 24 * time.Hour
+
+// Google's Colors endpoint still serves the pre-2018 palette (colorId 2 comes
+// back as #7ae7bf), while the Calendar UI paints those very events with the
+// current material shades. Rendering the API values would leave every coloured
+// event a visibly different colour than the one the user picked, so the eleven
+// known ids are mapped to what Google actually shows; anything unknown still
+// falls back to the palette from the API.
+var modernEventColors = map[string]string{
+	"1":  "#7986CB", // Lawenda
+	"2":  "#33B679", // Szałwia
+	"3":  "#8E24AA", // Winogrono
+	"4":  "#E67C73", // Flaming
+	"5":  "#F6BF26", // Banan
+	"6":  "#F4511E", // Mandarynka
+	"7":  "#039BE5", // Paw
+	"8":  "#616161", // Grafit
+	"9":  "#3F51B5", // Borówka
+	"10": "#0B8043", // Bazylia
+	"11": "#D50000", // Pomidor
+}
+
+func eventColor(svc *calendarapi.Service, colorID string, palette *map[string]string) string {
+	if hex, ok := modernEventColors[colorID]; ok {
+		return hex
+	}
+	if *palette == nil {
+		*palette = eventPalette(svc)
+	}
+	return (*palette)[colorID]
+}
 
 func eventPalette(svc *calendarapi.Service) map[string]string {
 	colorPalette.Lock()
